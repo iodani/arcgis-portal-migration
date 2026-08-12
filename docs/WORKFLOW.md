@@ -1,161 +1,161 @@
-# Workflow de migracion ArcGIS
+# ArcGIS Migration Workflow
 
-Guia de referencia del flujo completo para clonar Feature Services entre portales ArcGIS.
+Reference guide for the full workflow to clone Feature Services between ArcGIS portals.
 
 ---
 
-## Diagrama de flujo
+## Flow diagram
 
 ```mermaid
 flowchart TD
-  Setup[Setup venv y .env] --> Validate[validate.py]
+  Setup[Setup venv and .env] --> Validate[validate.py]
   Validate --> Audit[audit.py]
   Audit --> Prepare[prepare.py]
-  Prepare --> Curate[Usuario edita CSV - borra filas]
+  Prepare --> Curate[User edits CSV - remove rows]
   Curate --> Migrate[migrate.py]
   Migrate --> Report[report.py]
-  Report --> External[Proyecto externo: mapeo_migracion.csv]
+  Report --> External[External project: mapeo_migracion.csv]
 ```
 
 ---
 
-## Fases del workflow
+## Workflow phases
 
-| Fase | Comando | Input | Output | Origen | Destino | NEXT |
-|------|---------|-------|--------|--------|---------|------|
-| 1 Validar | `python scripts/validate.py` | `.env` | log | login | login | `audit.py` |
-| 2 Auditar | `python scripts/audit.py` | portal origen | `inventario_con_carpetas.csv` | lectura | — | `prepare.py` |
-| 3 Preparar | `python scripts/prepare.py` | inventario auditado | `inventario_migracion.csv` | — | — | editar CSV |
-| 4 Curar | manual | CSV input | CSV editado | — | — | `migrate.py` |
-| 5 Migrar | `python scripts/migrate.py` | CSV curado | `mapeo_migracion.csv`, `state.db` | export temp + delete | upload FGDB + publish + delete FGDB | `report.py` |
-| 6 Reportar | `python scripts/report.py` | `state.db` | `errores_migracion.csv` | — | — | proyecto externo |
-| 7 Externo | otro proyecto | `mapeo_migracion.csv` | UPDATE BD | — | — | — |
+| Phase | Command | Input | Output | Source | Destination | NEXT |
+|-------|---------|-------|--------|--------|-------------|------|
+| 1 Validate | `python scripts/validate.py` | `.env` | log | login | login | `audit.py` |
+| 2 Audit | `python scripts/audit.py` | source portal | `inventario_con_carpetas.csv` | read | — | `prepare.py` |
+| 3 Prepare | `python scripts/prepare.py` | audited inventory | `inventario_migracion.csv` | — | — | edit CSV |
+| 4 Curate | manual | input CSV | edited CSV | — | — | `migrate.py` |
+| 5 Migrate | `python scripts/migrate.py` | curated CSV | `mapeo_migracion.csv`, `state.db` | export temp + delete | upload FGDB + publish + delete FGDB | `report.py` |
+| 6 Report | `python scripts/report.py` | `state.db` | `errores_migracion.csv` | — | — | external project |
+| 7 External | other project | `mapeo_migracion.csv` | UPDATE DB | — | — | — |
 
 ---
 
-## Fase 1 — Validar conexiones
+## Phase 1 — Validate connections
 
 ```bash
 python scripts/validate.py
 ```
 
-- Comprueba variables `.env` y login en origen y destino.
-- **No exporta, sube ni publica capas.**
+- Checks `.env` variables and login to source and destination.
+- **Does not export, upload, or publish layers.**
 
 ---
 
-## Fase 2 — Auditoria
+## Phase 2 — Audit
 
 ```bash
 python scripts/audit.py
 ```
 
-Genera `data/output/inventario_con_carpetas.csv` con columnas:
+Generates `data/output/inventario_con_carpetas.csv` with columns:
 
 - `Titulo`, `ID_Viejo`, `URL_Vieja`, `Carpeta_Origen`, `Tamaño_MB`
 
-Solo lectura del portal origen. No modifica items.
+Read-only access to the source portal. Does not modify items.
 
 ---
 
-## Fase 3 — Preparar inventario
+## Phase 3 — Prepare inventory
 
 ```bash
 python scripts/prepare.py
 ```
 
-Copia automaticamente el inventario auditado a `data/input/inventario_migracion.csv` con las columnas que `migrate.py` necesita:
+Automatically copies the audited inventory to `data/input/inventario_migracion.csv` with the columns `migrate.py` requires:
 
 - `Titulo`, `ID_Viejo`, `URL_Vieja`, `Carpeta_Origen`
 
-Si el archivo ya existe, aborta (use `--force` para sobrescribir).
+If the file already exists, aborts (use `--force` to overwrite).
 
 ---
 
-## Fase 4 — Curar inventario (manual)
+## Phase 4 — Curate inventory (manual)
 
-1. Abrir `data/input/inventario_migracion.csv`
-2. **Eliminar filas** de capas que no desee migrar
-3. Guardar el archivo
+1. Open `data/input/inventario_migracion.csv`
+2. **Remove rows** for layers you do not want to migrate
+3. Save the file
 
-Plantilla de referencia: `data/input/inventario_migracion.example.csv`
+Reference template: `data/input/inventario_migracion.example.csv`
 
 ---
 
-## Fase 5 — Migracion masiva
+## Phase 5 — Batch migration
 
 ```bash
 python scripts/migrate.py
 ```
 
-Por cada item del inventario curado:
+For each item in the curated inventory:
 
-1. Obtiene el Feature Service en origen
-2. Habilita capacidad Extract
-3. Exporta a File Geodatabase en origen (`tmp_mig_*`)
-4. Descarga ZIP a `temp/` local
-5. Sube FGDB al portal destino (en carpeta correspondiente)
-6. Publica Feature Service en destino
-7. Elimina FGDB temporal en destino
-8. Elimina export temporal en origen y ZIP local
+1. Gets the Feature Service from source
+2. Enables Extract capability
+3. Exports to File Geodatabase on source (`tmp_mig_*`)
+4. Downloads ZIP to local `temp/`
+5. Uploads FGDB to destination portal (in the corresponding folder)
+6. Publishes Feature Service on destination
+7. Deletes temporary FGDB on destination
+8. Deletes temporary export on source and local ZIP
 
-Estado persistente en `state/migration_state.db`. Mapeo en `data/output/mapeo_migracion.csv`.
+Persistent state in `state/migration_state.db`. Mapping in `data/output/mapeo_migracion.csv`.
 
-### Reanudar / reintentar
+### Resume / retry
 
 ```bash
-python scripts/migrate.py              # salta items success
-python scripts/migrate.py --retry-errors  # reintenta items en error
+python scripts/migrate.py              # skips success items
+python scripts/migrate.py --retry-errors  # retries error items
 ```
 
-| Estado SQLite | Comportamiento |
-|---------------|----------------|
-| `success` | Se salta |
-| `pending` / `in_progress` | Se procesa |
-| `error` | Se salta (salvo `--retry-errors`) |
+| SQLite state | Behavior |
+|--------------|----------|
+| `success` | Skipped |
+| `pending` / `in_progress` | Processed |
+| `error` | Skipped (unless `--retry-errors`) |
 
 ---
 
-## Fase 6 — Reporte
+## Phase 6 — Report
 
 ```bash
 python scripts/report.py
 ```
 
-Resumen total/exitos/errores/pendientes. Exporta `data/output/errores_migracion.csv`.
+Summary of total/success/errors/pending. Exports `data/output/errores_migracion.csv`.
 
 ---
 
-## Fase 7 — Proyecto externo (BD)
+## Phase 7 — External project (database)
 
-Este tool **no actualiza bases de datos**. El entregable es `data/output/mapeo_migracion.csv`.
+This tool **does not update databases**. The deliverable is `data/output/mapeo_migracion.csv`.
 
-### Columnas
+### Columns
 
-| Columna | Uso |
-|---------|-----|
-| `ID_Viejo` | ID ArcGIS origen (clave para UPDATE) |
-| `URL_Vieja` | URL REST origen |
-| `ID_Nuevo` | ID ArcGIS destino |
-| `URL_Nueva` | URL REST destino |
-| `Titulo` | Nombre legible |
-| `Carpeta_Origen` | Carpeta origen (informativo) |
-| `Estado` | Filtrar solo `EXITO` |
-| `Error` | Detalle si fallo |
-| `Fecha` | Timestamp de migracion |
+| Column | Use |
+|--------|-----|
+| `ID_Viejo` | Source ArcGIS ID (key for UPDATE) |
+| `URL_Vieja` | Source REST URL |
+| `ID_Nuevo` | Destination ArcGIS ID |
+| `URL_Nueva` | Destination REST URL |
+| `Titulo` | Human-readable name |
+| `Carpeta_Origen` | Source folder (informational) |
+| `Estado` | Filter only `EXITO` |
+| `Error` | Detail if failed |
+| `Fecha` | Migration timestamp |
 
-### Regla
+### Rule
 
-Filtrar `Estado == EXITO` antes de aplicar cambios en BD.
+Filter `Estado == EXITO` before applying changes to the database.
 
-### Ejemplo
+### Example
 
 ```csv
 ID_Viejo,URL_Vieja,ID_Nuevo,URL_Nueva,Titulo,Carpeta_Origen,Estado,Error,Fecha
 daf865312ea445b98dca8f1e763990a9,https://services8.arcgis.com/.../FeatureServer,9ffa9ced3fdc46248a4f3700ae8cc685,https://services7.arcgis.com/.../FeatureServer,12354,RAIZ,EXITO,,2026-08-12 19:45:55
 ```
 
-### Pseudocodigo consumo externo
+### External consumption pseudocode
 
 ```python
 import pandas as pd
@@ -163,35 +163,35 @@ import pandas as pd
 df = pd.read_csv("data/output/mapeo_migracion.csv")
 ok = df[df["Estado"] == "EXITO"]
 for _, row in ok.iterrows():
-    # UPDATE capas SET arcgis_id = row.ID_Nuevo, url = row.URL_Nueva
+    # UPDATE layers SET arcgis_id = row.ID_Nuevo, url = row.URL_Nueva
     # WHERE arcgis_id = row.ID_Viejo
     pass
 ```
 
 ---
 
-## Carpeta RAIZ
+## RAIZ folder
 
-`RAIZ` es una **etiqueta interna** para items que en origen estan en la raiz del portal (sin carpeta asignada).
+`RAIZ` is an **internal label** for items that sit at the root of the source portal (no assigned folder).
 
-**No se crea** una carpeta llamada "RAIZ" en el portal destino.
+A folder named "RAIZ" is **not created** on the destination portal.
 
-Comportamiento en codigo:
+Code behavior:
 
-- `ensure_folder()`: si `folder_name` es `RAIZ` o vacio, no crea carpeta
-- `migrate_item()`: usa `folder=None` en la API → el Feature Service queda en la **raiz del portal destino**
+- `ensure_folder()`: if `folder_name` is `RAIZ` or empty, no folder is created
+- `migrate_item()`: uses `folder=None` in the API → the Feature Service lands at the **destination portal root**
 
-Si `Carpeta_Origen` tiene un nombre real (ej. `"Carmel FD - stage"`), se crea esa carpeta en destino solo si no existe, y el item se publica ahi.
+If `Carpeta_Origen` has a real name (e.g. `"Carmel FD - stage"`), that folder is created on destination only if it does not exist, and the item is published there.
 
 ```mermaid
 flowchart LR
-  subgraph origen [Origen]
-    RootItem[Item sin carpeta]
-    FolderItem[Item en carpeta real]
+  subgraph source [Source]
+    RootItem[Item without folder]
+    FolderItem[Item in real folder]
   end
-  subgraph destino [Destino]
-    PortalRoot[Raiz del portal]
-    RealFolder[Carpeta con nombre real]
+  subgraph destination [Destination]
+    PortalRoot[Portal root]
+    RealFolder[Folder with real name]
   end
   RootItem -->|"RAIZ -> folder=None"| PortalRoot
   FolderItem -->|"ensure_folder(name)"| RealFolder
@@ -199,18 +199,18 @@ flowchart LR
 
 ---
 
-## Archivos generados (runtime)
+## Generated files (runtime)
 
-Estos archivos se crean al ejecutar el workflow y **no forman parte del codigo fuente**:
+These files are created when running the workflow and **are not part of the source code**:
 
-| Archivo | Generado por |
-|---------|--------------|
+| File | Generated by |
+|------|--------------|
 | `data/output/inventario_con_carpetas.csv` | `audit.py` |
-| `data/input/inventario_migracion.csv` | `prepare.py` + edicion manual |
+| `data/input/inventario_migracion.csv` | `prepare.py` + manual edit |
 | `data/output/mapeo_migracion.csv` | `migrate.py` |
 | `data/output/errores_migracion.csv` | `report.py` |
 | `state/migration_state.db` | `migrate.py` |
-| `logs/<script>_*.log` | todos los scripts |
-| `temp/*.zip` | `migrate.py` (temporal) |
+| `logs/<script>_*.log` | all scripts |
+| `temp/*.zip` | `migrate.py` (temporary) |
 
-Ver `.gitignore` para la lista completa de exclusiones.
+These files are excluded from source control.

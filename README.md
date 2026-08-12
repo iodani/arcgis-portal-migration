@@ -1,63 +1,63 @@
-# Migración ArcGIS Online → Portal Destino
+# ArcGIS Portal Migration Toolkit
 
-Workflow profesional para clonar Feature Services entre portales ArcGIS, con trazabilidad completa (logs + CSV de mapeo), checkpoint/resume y reporte de errores.
+Python tool to **migrate and clone ArcGIS Feature Services** from a source portal (ArcGIS Online or Enterprise) to a destination portal, with full audit trail, checkpoint/resume, and CSV mapping for external database updates.
 
-**Python 3.11** | **arcgis 2.4.x**
+**Python 3.11** | **arcgis 2.4.x** | Feature Service migration | Batch workflow
 
-Documentación detallada del workflow: [docs/WORKFLOW.md](docs/WORKFLOW.md)
+Detailed workflow documentation: [docs/WORKFLOW.md](docs/WORKFLOW.md)
 
 ---
 
-## Requisitos
+## Requirements
 
 - Python 3.11 (`py -3.11 --version`)
-- Cuenta **origen** con permiso Export Data sobre las capas
-- Cuenta **destino** con permiso Publish y crear carpetas
-- Acceso de red a ambos portales
+- **Source** account with Export Data permission on layers
+- **Destination** account with Publish permission and ability to create folders
+- Network access to both portals
 
-Este proyecto **no actualiza bases de datos**. El entregable para BD externa es `data/output/mapeo_migracion.csv`.
+This project **does not update databases**. The deliverable for external DB use is `data/output/mapeo_migracion.csv`.
 
 ---
 
-## Instalación (primera vez)
+## Installation (first time)
 
-Ejecutar desde la raíz del proyecto (`migracion_esri/`).
+Run from the project root (`migracion_esri/`).
 
 ### Git Bash
 
 ```bash
-cd /c/ruta/a/migracion_esri
+cd /c/path/to/migracion_esri
 py -3.11 -m venv .venv
 source .venv/Scripts/activate
 pip install -r requirements.txt
 cp .env.example .env
-# Editar .env con credenciales
+# Edit .env with credentials
 ```
 
 ### PowerShell
 
 ```powershell
-cd C:\ruta\a\migracion_esri
+cd C:\path\to\migracion_esri
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env
-# Editar .env con credenciales
+# Edit .env with credentials
 ```
 
 ### CMD
 
 ```cmd
-cd C:\ruta\a\migracion_esri
+cd C:\path\to\migracion_esri
 py -3.11 -m venv .venv
 .venv\Scripts\activate.bat
 pip install -r requirements.txt
 copy .env.example .env
 ```
 
-### Sesiones posteriores — activar entorno
+### Subsequent sessions — activate environment
 
-| Shell | Comando |
+| Shell | Command |
 |-------|---------|
 | Git Bash | `source .venv/Scripts/activate` |
 | PowerShell | `.\.venv\Scripts\Activate.ps1` |
@@ -65,7 +65,7 @@ copy .env.example .env
 
 ---
 
-## Configuración (`.env`)
+## Configuration (`.env`)
 
 ```env
 ORIGEN_URL=https://your-org.maps.arcgis.com/
@@ -76,101 +76,101 @@ DESTINO_USER=...
 DESTINO_PASS=...
 ```
 
-Checklist antes de ejecutar:
+Checklist before running:
 
-- [ ] `.env` configurado
-- [ ] venv activo (`(.venv)` en el prompt)
+- [ ] `.env` configured
+- [ ] venv active (`(.venv)` in prompt)
 - [ ] `python --version` → 3.11.x
 
 ---
 
-## Workflow — paso a paso
+## Workflow — step by step
 
-### Paso 1 — Validar conexiones (no migra nada)
+### Step 1 — Validate connections (does not migrate)
 
 ```bash
 python scripts/validate.py
 ```
 
-Comprueba variables `.env` y login en origen y destino. **No exporta, sube ni publica capas.**
+Checks `.env` variables and login to source and destination. **Does not export, upload, or publish layers.**
 
-Al finalizar muestra resumen + `NEXT -> python scripts/audit.py`
+On completion shows summary + `NEXT -> python scripts/audit.py`
 
-### Paso 2 — Auditoría
+### Step 2 — Audit
 
 ```bash
 python scripts/audit.py
 ```
 
-Genera `data/output/inventario_con_carpetas.csv` con todos los Feature Services del origen.
+Generates `data/output/inventario_con_carpetas.csv` with all Feature Services from the source portal.
 
-### Paso 3 — Preparar inventario de migración
+### Step 3 — Prepare migration inventory
 
 ```bash
 python scripts/prepare.py
 ```
 
-Copia automáticamente `data/output/inventario_con_carpetas.csv` → `data/input/inventario_migracion.csv`.
+Automatically copies `data/output/inventario_con_carpetas.csv` → `data/input/inventario_migracion.csv`.
 
-Luego **edite el CSV y elimine filas** de capas que no desee migrar.
+Then **edit the CSV and remove rows** for layers you do not want to migrate.
 
-Para regenerar desde cero: `python scripts/prepare.py --force`
+To regenerate from scratch: `python scripts/prepare.py --force`
 
-Documentación detallada: [docs/WORKFLOW.md](docs/WORKFLOW.md)
+Detailed documentation: [docs/WORKFLOW.md](docs/WORKFLOW.md)
 
-### Paso 4 — Migración masiva
-
-```bash
-python scripts/migrate.py
-```
-
-- Progreso en consola y `logs/migrate_*.log`
-- Estado persistente en `state/migration_state.db`
-- Mapeo por item en `data/output/mapeo_migracion.csv`
-
-### Paso 5 — Reanudar si se interrumpe
+### Step 4 — Batch migration
 
 ```bash
 python scripts/migrate.py
 ```
 
-- `success` → se salta
-- `in_progress` / `pending` → se procesa
-- `error` → se salta (usar `--retry-errors` para reintentar)
+- Progress in console and `logs/migrate_*.log`
+- Persistent state in `state/migration_state.db`
+- Per-item mapping in `data/output/mapeo_migracion.csv`
+
+### Step 5 — Resume if interrupted
+
+```bash
+python scripts/migrate.py
+```
+
+- `success` → skipped
+- `in_progress` / `pending` → processed
+- `error` → skipped (use `--retry-errors` to retry)
 
 ```bash
 python scripts/migrate.py --retry-errors
 ```
 
-### Paso 6 — Reporte
+### Step 6 — Report
 
 ```bash
 python scripts/report.py
 ```
 
-Resumen total/éxito/error/pendiente. Exporta `data/output/errores_migracion.csv`.
+Summary of total/success/error/pending. Exports `data/output/errores_migracion.csv`.
 
-### Paso 7 — BD externa
+### Step 7 — External database
 
-Usar `data/output/mapeo_migracion.csv` en otro entorno para actualizar IDs y URLs. Ver [docs/WORKFLOW.md](docs/WORKFLOW.md) para formato y pseudocódigo.
+Use `data/output/mapeo_migracion.csv` in another environment to update IDs and URLs. See [docs/WORKFLOW.md](docs/WORKFLOW.md) for format and pseudocode.
 
 ---
 
-## Referencia rápida
+## Quick reference
 
-| Acción | Comando |
+| Action | Command |
 |--------|---------|
-| Validar conexiones | `python scripts/validate.py` |
-| Auditoría | `python scripts/audit.py` |
-| Preparar inventario | `python scripts/prepare.py` |
-| Migración | `python scripts/migrate.py` |
-| Reanudar | `python scripts/migrate.py` |
-| Reintentar errores | `python scripts/migrate.py --retry-errors` |
-| Reporte | `python scripts/report.py` |
+| Validate connections | `python scripts/validate.py` |
+| Audit | `python scripts/audit.py` |
+| Prepare inventory | `python scripts/prepare.py` |
+| Migration | `python scripts/migrate.py` |
+| Resume | `python scripts/migrate.py` |
+| Retry errors | `python scripts/migrate.py --retry-errors` |
+| Report | `python scripts/report.py` |
 
 ---
 
-## Estructura del proyecto
+## Project structure
 
 ```
 migracion_esri/
@@ -179,7 +179,7 @@ migracion_esri/
 ├── src/migracion_esri/
 ├── data/
 │   ├── input/         # inventario_migracion.csv (local, gitignored)
-│   └── output/        # generados en ejecucion (gitignored)
+│   └── output/        # generated at runtime (gitignored)
 ├── state/             # migration_state.db (gitignored)
 ├── logs/
 └── temp/
@@ -187,13 +187,13 @@ migracion_esri/
 
 ---
 
-## Archivos de salida
+## Output files
 
-| Archivo | Propósito |
-|---------|-----------|
-| `data/output/inventario_con_carpetas.csv` | Inventario completo origen |
-| `data/input/inventario_migracion.csv` | Lista curada a migrar |
-| `data/output/mapeo_migracion.csv` | Mapeo ID/URL viejo → nuevo |
-| `data/output/errores_migracion.csv` | Items no clonables |
-| `state/migration_state.db` | Estado para resume |
-| `logs/<script>_*.log` | Log detallado con contexto de errores |
+| File | Purpose |
+|------|---------|
+| `data/output/inventario_con_carpetas.csv` | Full source inventory |
+| `data/input/inventario_migracion.csv` | Curated list to migrate |
+| `data/output/mapeo_migracion.csv` | Old → new ID/URL mapping |
+| `data/output/errores_migracion.csv` | Items that could not be cloned |
+| `state/migration_state.db` | State for resume |
+| `logs/<script>_*.log` | Detailed log with error context |
