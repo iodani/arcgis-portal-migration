@@ -199,21 +199,6 @@ flowchart LR
 
 ---
 
-## Limpieza de temporales
-
-| Recurso | Ubicacion | Cuando se borra | Solo si lo creamos |
-|---------|-----------|-----------------|---------------------|
-| Export `tmp_mig_*` | Nube origen | `finally` en migrator | Si |
-| ZIP descargado | `temp/` local | `finally` en migrator | Si |
-| FGDB subido | Nube destino | Tras publish OK | Si |
-| Feature Service publicado | Nube destino | **No se borra** | Producto final |
-
-El codigo solo elimina recursos creados durante la ejecucion actual. No toca items preexistentes del usuario.
-
-**Edge case:** si el proceso se interrumpe antes del bloque `finally`, pueden quedar exports huérfanos `tmp_mig_*` en origen. En ese caso, borrarlos manualmente desde el portal origen.
-
----
-
 ## Archivos generados (runtime)
 
 Estos archivos se crean al ejecutar el workflow y **no forman parte del codigo fuente**:
