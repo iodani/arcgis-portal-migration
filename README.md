@@ -187,21 +187,6 @@ migracion_esri/
 
 ---
 
-## Qué no va al repositorio
-
-Los siguientes paths se excluyen via `.gitignore` y permanecen solo en local:
-
-- `.env` — credenciales
-- `.venv/` — entorno virtual
-- `legacy/` — scripts historicos de referencia local
-- `data/input/inventario_migracion.csv` — inventario de trabajo
-- `data/output/*` — inventarios, mapeos y errores generados
-- `state/*.db` — estado SQLite de ejecucion
-- `logs/*.log` — logs de ejecucion
-- `temp/*` — archivos temporales de migracion
-
----
-
 ## Archivos de salida
 
 | Archivo | Propósito |
@@ -212,15 +197,3 @@ Los siguientes paths se excluyen via `.gitignore` y permanecen solo en local:
 | `data/output/errores_migracion.csv` | Items no clonables |
 | `state/migration_state.db` | Estado para resume |
 | `logs/<script>_*.log` | Log detallado con contexto de errores |
-
----
-
-## Solución de problemas
-
-| Problema | Acción |
-|----------|--------|
-| `'Folder' object has no attribute 'title'` | Usar `scripts/` (API arcgis 2.4.3) |
-| `InsecureRequestWarning` | Aviso SSL; opcional `$env:PYTHONWARNINGS="ignore"` |
-| Item sin permiso Extract | Queda en ERROR; revisar permisos en origen |
-| Script interrumpido | Reejecutar `python scripts/migrate.py` |
-| `prepare.py` dice que ya existe el inventario | Editar el CSV, usar `--force`, o borrarlo |
