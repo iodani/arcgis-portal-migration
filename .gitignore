@@ -1,0 +1,27 @@
+# Entorno
+.venv/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Legacy local (no subir al repo)
+legacy/
+
+# Datos de ejecucion (runtime)
+data/input/inventario_migracion.csv
+data/output/*
+!data/output/.gitkeep
+
+# Estado y logs
+state/*
+!state/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Temporales locales
+temp/*
+!temp/.gitkeep
