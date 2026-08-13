@@ -12,7 +12,16 @@ from migracion_esri.config import DATA_INPUT, INVENTARIO_CARPETAS, load_config
 from migracion_esri.logging_setup import setup_logging
 from migracion_esri.workflow_ui import WorkflowSummary, print_failure_summary, print_summary
 
-OUTPUT_COLUMNS = ["Titulo", "ID_Viejo", "URL_Vieja", "Carpeta_Origen"]
+OUTPUT_COLUMNS = [
+    "Titulo",
+    "ID_Viejo",
+    "URL_Vieja",
+    "Carpeta_Origen",
+    "Type",
+    "Fase",
+    "Driver",
+]
+LEGACY_COLUMNS = ["Titulo", "ID_Viejo", "URL_Vieja", "Carpeta_Origen"]
 
 
 def main() -> int:
@@ -42,13 +51,24 @@ def main() -> int:
             )
 
         df = pd.read_csv(INVENTARIO_CARPETAS)
-        missing = set(OUTPUT_COLUMNS) - set(df.columns)
-        if missing:
-            raise ValueError(
-                f"Columnas faltantes en inventario auditado: {', '.join(sorted(missing))}"
-            )
+        if "Type" in df.columns:
+            missing = set(OUTPUT_COLUMNS) - set(df.columns)
+            if missing:
+                raise ValueError(
+                    f"Columnas faltantes en inventario auditado: {', '.join(sorted(missing))}"
+                )
+            out = df[OUTPUT_COLUMNS].copy()
+        else:
+            missing = set(LEGACY_COLUMNS) - set(df.columns)
+            if missing:
+                raise ValueError(
+                    f"Columnas faltantes en inventario auditado: {', '.join(sorted(missing))}"
+                )
+            out = df[LEGACY_COLUMNS].copy()
+            out["Type"] = "Feature Service"
+            out["Fase"] = 1
+            out["Driver"] = "feature_service"
 
-        out = df[OUTPUT_COLUMNS].copy()
         out.to_csv(DATA_INPUT, index=False, encoding="utf-8")
 
         summary = WorkflowSummary(

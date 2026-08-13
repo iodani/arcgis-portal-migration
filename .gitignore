@@ -13,6 +13,7 @@ legacy/
 
 # Datos de ejecucion (runtime)
 data/input/inventario_migracion.csv
+data/input/inventario_pilot.csv
 data/output/*
 !data/output/.gitkeep
 

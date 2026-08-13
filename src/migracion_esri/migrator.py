@@ -1,18 +1,18 @@
-import os
-import time
-from dataclasses import dataclass
-
 from arcgis.gis import GIS
 
-from migracion_esri.config import TEMP_DIR
-from migracion_esri.folders import ensure_folder, resolve_folder_name
-from migracion_esri.logging_setup import log_error_context
+from migracion_esri.drivers.base import MigrationResult
+from migracion_esri.drivers.clone_items import CloneItemsDriver
+from migracion_esri.drivers.feature_service import FeatureServiceDriver
+from migracion_esri.drivers.registry import (
+    DRIVER_CLONE_ITEMS,
+    DRIVER_FEATURE_SERVICE,
+    DRIVER_SKIP,
+    FEATURE_SERVICE_TYPE,
+    get_driver_name,
+)
+from migracion_esri.drivers.skip import SkipDriver
 
-
-@dataclass
-class MigrationResult:
-    id_nuevo: str
-    url_nueva: str
+__all__ = ["ItemMigrator", "MigrationResult"]
 
 
 class ItemMigrator:
@@ -21,122 +21,40 @@ class ItemMigrator:
         self.gis_destino = gis_destino
         self.logger = logger
         self.folder_map = folder_map
+        self._feature_service = FeatureServiceDriver(gis_origen, gis_destino, logger, folder_map)
+        self._clone_items = CloneItemsDriver(gis_origen, gis_destino, logger, folder_map)
+        self._skip = SkipDriver()
 
     def migrate_item(
         self,
         id_viejo: str,
         titulo: str,
         carpeta_origen: str,
+        item_type: str = FEATURE_SERVICE_TYPE,
+        dest_folder_override: str | None = None,
     ) -> MigrationResult:
-        temp_export_item = None
-        path_zip = None
-        nuevo_item_fgdb = None
+        driver_name = get_driver_name(item_type)
+        self.logger.info("[%s] Type=%s Driver=%s", titulo, item_type, driver_name)
 
-        try:
-            self.logger.info("[%s] Obteniendo item origen", titulo)
-            item = self.gis_origen.content.get(id_viejo)
-            if not item:
-                raise ValueError(f"Item no encontrado en origen: {id_viejo}")
+        if driver_name == DRIVER_SKIP:
+            self._skip.migrate(
+                id_viejo,
+                titulo,
+                carpeta_origen,
+                item_type,
+                dest_folder_override,
+            )
 
-            folder_name = carpeta_origen
-            if not folder_name or folder_name == "RAIZ":
-                folder_name = resolve_folder_name(
-                    self.gis_origen, item.ownerFolder, self.folder_map
-                )
-            ensure_folder(self.gis_destino, folder_name)
-            dest_folder = None if folder_name in ("", "RAIZ") else folder_name
+        if driver_name == DRIVER_FEATURE_SERVICE:
+            return self._feature_service.migrate(
+                id_viejo, titulo, carpeta_origen, dest_folder_override
+            )
 
-            self.logger.info("[%s] Habilitando exportación", titulo)
-            item.update(item_properties={"capabilities": "Query,Extract"})
+        if driver_name == DRIVER_CLONE_ITEMS:
+            return self._clone_items.migrate(
+                id_viejo, titulo, carpeta_origen, dest_folder_override
+            )
 
-            self.logger.info("[%s] Exportando FGDB en origen", titulo)
-            export_name = f"tmp_mig_{int(time.time())}"
-            try:
-                temp_export_item = item.export(export_name, "File Geodatabase")
-            except Exception as exc:
-                log_error_context(
-                    self.logger,
-                    "migrate",
-                    "Fallo en exportación",
-                    portal="origen",
-                    fase="export",
-                    id_viejo=id_viejo,
-                    titulo=titulo,
-                    exc=exc,
-                )
-                raise
-
-            self.logger.info("[%s] Descargando archivo local", titulo)
-            try:
-                path_zip = temp_export_item.download(save_path=str(TEMP_DIR))
-            except Exception as exc:
-                log_error_context(
-                    self.logger,
-                    "migrate",
-                    "Fallo en descarga",
-                    portal="origen",
-                    fase="download",
-                    id_viejo=id_viejo,
-                    titulo=titulo,
-                    exc=exc,
-                )
-                raise
-
-            self.logger.info("[%s] Subiendo FGDB a destino (carpeta=%s)", titulo, dest_folder or "RAIZ")
-            props = {"title": titulo, "type": "File Geodatabase"}
-            if item.tags:
-                props["tags"] = item.tags
-            try:
-                nuevo_item_fgdb = self.gis_destino.content.add(
-                    item_properties=props,
-                    data=path_zip,
-                    folder=dest_folder,
-                )
-            except Exception as exc:
-                log_error_context(
-                    self.logger,
-                    "migrate",
-                    "Fallo en subida",
-                    portal="destino",
-                    fase="upload",
-                    id_viejo=id_viejo,
-                    titulo=titulo,
-                    exc=exc,
-                )
-                raise
-
-            self.logger.info("[%s] Publicando servicio", titulo)
-            try:
-                capa_publicada = nuevo_item_fgdb.publish()
-            except Exception as exc:
-                log_error_context(
-                    self.logger,
-                    "migrate",
-                    "Fallo en publicación",
-                    portal="destino",
-                    fase="publish",
-                    id_viejo=id_viejo,
-                    titulo=titulo,
-                    exc=exc,
-                )
-                raise
-
-            self.logger.info("[%s] Eliminando FGDB temporal en destino", titulo)
-            try:
-                nuevo_item_fgdb.delete()
-            except Exception as exc:
-                self.logger.warning("[%s] No se pudo borrar FGDB destino: %s", titulo, exc)
-
-            return MigrationResult(id_nuevo=capa_publicada.id, url_nueva=capa_publicada.url)
-
-        finally:
-            if temp_export_item:
-                try:
-                    temp_export_item.delete()
-                except Exception:
-                    pass
-            if path_zip and os.path.exists(path_zip):
-                try:
-                    os.remove(path_zip)
-                except Exception:
-                    pass
+        return self._clone_items.migrate(
+            id_viejo, titulo, carpeta_origen, dest_folder_override
+        )

@@ -13,6 +13,7 @@ from migracion_esri.state import (
     STATUS_ERROR,
     STATUS_IN_PROGRESS,
     STATUS_PENDING,
+    STATUS_SKIPPED,
     STATUS_SUCCESS,
 )
 from migracion_esri.workflow_ui import WorkflowSummary, print_failure_summary, print_summary
@@ -30,22 +31,24 @@ def main() -> int:
 
         with open(ERRORES_MIGRACION, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["ID_Viejo", "Titulo", "URL_Vieja", "Carpeta_Origen", "Error", "Fecha"])
+            writer.writerow([
+                "ID_Viejo", "Titulo", "URL_Vieja", "Carpeta_Origen", "Type", "Error", "Fecha",
+            ])
             for item in errors:
-                writer.writerow(
-                    [
-                        item.id_viejo,
-                        item.titulo,
-                        item.url_vieja,
-                        item.carpeta_origen,
-                        item.error,
-                        item.updated_at,
-                    ]
-                )
-                logger.error(
-                    "Item no clonado | id=%s titulo=%s error=%s",
+                writer.writerow([
                     item.id_viejo,
                     item.titulo,
+                    item.url_vieja,
+                    item.carpeta_origen,
+                    item.item_type,
+                    item.error,
+                    item.updated_at,
+                ])
+                logger.error(
+                    "Item no clonado | id=%s titulo=%s type=%s error=%s",
+                    item.id_viejo,
+                    item.titulo,
+                    item.item_type,
                     item.error,
                 )
 
@@ -55,6 +58,7 @@ def main() -> int:
                 f" Total registrados: {counts['total']}",
                 f" Exitos: {counts[STATUS_SUCCESS]}",
                 f" Errores: {counts[STATUS_ERROR]}",
+                f" Skipped: {counts[STATUS_SKIPPED]}",
                 f" Pendientes: {counts[STATUS_PENDING] + counts[STATUS_IN_PROGRESS]}",
                 f" Mapeo CSV: {MAPEO_MIGRACION}",
                 f" Errores CSV: {ERRORES_MIGRACION}",

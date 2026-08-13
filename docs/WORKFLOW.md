@@ -1,6 +1,6 @@
 # ArcGIS Migration Workflow
 
-Reference guide for the full workflow to clone Feature Services between ArcGIS portals.
+Reference guide for the full workflow to clone portal content between ArcGIS portals (multi-type with drivers).
 
 ---
 
@@ -10,8 +10,13 @@ Reference guide for the full workflow to clone Feature Services between ArcGIS p
 flowchart TD
   Setup[Setup venv and .env] --> Validate[validate.py]
   Validate --> Audit[audit.py]
-  Audit --> Prepare[prepare.py]
-  Prepare --> Curate[User edits CSV - remove rows]
+  Audit --> PilotChoice{Pilot or full?}
+  PilotChoice -->|Pilot| PreparePilot[prepare_pilot.py]
+  PilotChoice -->|Full| Prepare[prepare.py]
+  PreparePilot --> MigratePilot[migrate.py --pilot-folder]
+  MigratePilot --> Cleanup[cleanup_pilot.py]
+  Cleanup --> PilotReport[prepare_pilot.py --report]
+  Prepare --> Curate[User edits CSV]
   Curate --> Migrate[migrate.py]
   Migrate --> Report[report.py]
   Report --> External[External project: mapeo_migracion.csv]
@@ -19,17 +24,61 @@ flowchart TD
 
 ---
 
-## Workflow phases
+## Workflow phases (production)
 
-| Phase | Command | Input | Output | Source | Destination | NEXT |
-|-------|---------|-------|--------|--------|-------------|------|
-| 1 Validate | `python scripts/validate.py` | `.env` | log | login | login | `audit.py` |
-| 2 Audit | `python scripts/audit.py` | source portal | `inventario_con_carpetas.csv` | read | — | `prepare.py` |
-| 3 Prepare | `python scripts/prepare.py` | audited inventory | `inventario_migracion.csv` | — | — | edit CSV |
-| 4 Curate | manual | input CSV | edited CSV | — | — | `migrate.py` |
-| 5 Migrate | `python scripts/migrate.py` | curated CSV | `mapeo_migracion.csv`, `state.db` | export temp + delete | upload FGDB + publish + delete FGDB | `report.py` |
-| 6 Report | `python scripts/report.py` | `state.db` | `errores_migracion.csv` | — | — | external project |
-| 7 External | other project | `mapeo_migracion.csv` | UPDATE DB | — | — | — |
+| Phase | Command | Input | Output | NEXT |
+|-------|---------|-------|--------|------|
+| 1 Validate | `python scripts/validate.py` | `.env` | log | `audit.py` |
+| 2 Audit | `python scripts/audit.py` | source portal | `inventario_con_carpetas.csv` | `prepare_pilot.py` or `prepare.py` |
+| 3 Prepare | `python scripts/prepare.py` | audited inventory | `inventario_migracion.csv` | edit CSV |
+| 4 Curate | manual | input CSV | edited CSV | `migrate.py` |
+| 5 Migrate | `python scripts/migrate.py` | curated CSV | `mapeo_migracion.csv`, `state.db` | `report.py` |
+| 6 Report | `python scripts/report.py` | `state.db` | `errores_migracion.csv` | external project |
+
+---
+
+## Pilot workflow (1 item per ArcGIS Type)
+
+Use this **before** full migration to test all ~44 content types without polluting the destination portal.
+
+| Phase | Command |
+|-------|---------|
+| A Validate | `python scripts/validate.py` |
+| B Audit | `python scripts/audit.py` |
+| C Prepare pilot | `python scripts/prepare_pilot.py --force` |
+| D Migrate pilot | `python scripts/migrate.py --inventory data/input/inventario_pilot.csv --pilot-folder MIGRACION_PILOTO_TIPOS` |
+| E Cleanup | `python scripts/cleanup_pilot.py --inventory data/input/inventario_pilot.csv --pilot-folder MIGRACION_PILOTO_TIPOS` |
+| F Matrix | `python scripts/prepare_pilot.py --report` |
+
+Pilot uses isolated state: `state/pilot_state.db` and `data/output/mapeo_pilot.csv`.
+
+Expected pilot inventory: **~44 rows** (one per ArcGIS `Type`, not one per internal driver).
+
+| Result in mapeo | Meaning |
+|-----------------|---------|
+| `EXITO` | Type migrated successfully |
+| `SKIP` | Type excluded by design (API Key, Hub, etc.) |
+| `ERROR` | Migration attempted and failed |
+
+Dry-run cleanup:
+
+```bash
+python scripts/cleanup_pilot.py --dry-run
+```
+
+---
+
+## Migration drivers
+
+Items are routed by ArcGIS `Type` to one of three internal drivers:
+
+| Driver | Types | Mechanism |
+|--------|-------|-----------|
+| `feature_service` | Feature Service | export FGDB → upload → publish (proven flow) |
+| `clone_items` | Most other types | `clone_items(copy_data=True)` |
+| `skip` | API Key, Hub, Admin Report, etc. | Registered as SKIP, no API call |
+
+Execution order: **Fase 1** (data/services) → **Fase 2** (Web Maps, Dashboards…) → **Fase 0** (skip types).
 
 ---
 
@@ -52,9 +101,9 @@ python scripts/audit.py
 
 Generates `data/output/inventario_con_carpetas.csv` with columns:
 
-- `Titulo`, `ID_Viejo`, `URL_Vieja`, `Carpeta_Origen`, `Tamaño_MB`
+- `Titulo`, `ID_Viejo`, `URL_Vieja`, `Carpeta_Origen`, `Tamaño_MB`, `Type`, `Fase`, `Driver`
 
-Read-only access to the source portal. Does not modify items.
+Read-only access to the source portal. Inventories **all org content** (~2971 items, ~45 types).
 
 ---
 
@@ -64,9 +113,9 @@ Read-only access to the source portal. Does not modify items.
 python scripts/prepare.py
 ```
 
-Automatically copies the audited inventory to `data/input/inventario_migracion.csv` with the columns `migrate.py` requires:
+Automatically copies the audited inventory to `data/input/inventario_migracion.csv` with columns:
 
-- `Titulo`, `ID_Viejo`, `URL_Vieja`, `Carpeta_Origen`
+- `Titulo`, `ID_Viejo`, `URL_Vieja`, `Carpeta_Origen`, `Type`, `Fase`, `Driver`
 
 If the file already exists, aborts (use `--force` to overwrite).
 
@@ -86,20 +135,17 @@ Reference template: `data/input/inventario_migracion.example.csv`
 
 ```bash
 python scripts/migrate.py
+python scripts/migrate.py --inventory data/input/inventario_pilot.csv --pilot-folder MIGRACION_PILOTO_TIPOS
 ```
 
-For each item in the curated inventory:
+For each item, the router selects a driver by `Type`:
 
-1. Gets the Feature Service from source
-2. Enables Extract capability
-3. Exports to File Geodatabase on source (`tmp_mig_*`)
-4. Downloads ZIP to local `temp/`
-5. Uploads FGDB to destination portal (in the corresponding folder)
-6. Publishes Feature Service on destination
-7. Deletes temporary FGDB on destination
-8. Deletes temporary export on source and local ZIP
+1. **Feature Service** — export FGDB → upload → publish (unchanged)
+2. **Other types** — `clone_items(copy_data=True)`
+3. **Skip types** — registered as SKIP in mapeo
 
-Persistent state in `state/migration_state.db`. Mapping in `data/output/mapeo_migracion.csv`.
+Persistent state in `state/migration_state.db` (or `state/pilot_state.db` for pilot).
+Mapping in `data/output/mapeo_migracion.csv` (or `mapeo_pilot.csv` for pilot).
 
 ### Resume / retry
 
@@ -111,6 +157,7 @@ python scripts/migrate.py --retry-errors  # retries error items
 | SQLite state | Behavior |
 |--------------|----------|
 | `success` | Skipped |
+| `skipped` | Skipped (SKIP types or intentional skip) |
 | `pending` / `in_progress` | Processed |
 | `error` | Skipped (unless `--retry-errors`) |
 
@@ -122,7 +169,7 @@ python scripts/migrate.py --retry-errors  # retries error items
 python scripts/report.py
 ```
 
-Summary of total/success/errors/pending. Exports `data/output/errores_migracion.csv`.
+Summary of total/success/errors/skipped/pending. Exports `data/output/errores_migracion.csv` (ERROR only, not SKIP).
 
 ---
 
@@ -207,9 +254,14 @@ These files are created when running the workflow and **are not part of the sour
 |------|--------------|
 | `data/output/inventario_con_carpetas.csv` | `audit.py` |
 | `data/input/inventario_migracion.csv` | `prepare.py` + manual edit |
+| `data/input/inventario_pilot.csv` | `prepare_pilot.py` (runtime, gitignored) |
+| `data/input/inventario_pilot.example.csv` | template (committed) |
 | `data/output/mapeo_migracion.csv` | `migrate.py` |
+| `data/output/mapeo_pilot.csv` | `migrate.py` (pilot mode) |
+| `data/output/pilot_matrix.csv` | `prepare_pilot.py --report` |
 | `data/output/errores_migracion.csv` | `report.py` |
 | `state/migration_state.db` | `migrate.py` |
+| `state/pilot_state.db` | `migrate.py` (pilot mode) |
 | `logs/<script>_*.log` | all scripts |
 | `temp/*.zip` | `migrate.py` (temporary) |
 

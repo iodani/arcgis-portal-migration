@@ -25,7 +25,7 @@ def main() -> int:
                 f" Destino: conectado (user={destino.username}, url={destino.url})",
             ],
             next_command="python scripts/audit.py",
-            next_hint="Generar inventario de Feature Services del portal origen",
+            next_hint="Generar inventario multi-tipo del portal origen",
         )
         print_summary(summary, logger)
         return 0

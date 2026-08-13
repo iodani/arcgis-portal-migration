@@ -10,6 +10,7 @@ STATUS_PENDING = "pending"
 STATUS_IN_PROGRESS = "in_progress"
 STATUS_SUCCESS = "success"
 STATUS_ERROR = "error"
+STATUS_SKIPPED = "skipped"
 
 MAPEO_HEADERS = [
     "ID_Viejo",
@@ -30,6 +31,9 @@ class MigrationItem:
     titulo: str
     url_vieja: str
     carpeta_origen: str
+    item_type: str = "Feature Service"
+    fase: int = 1
+    driver: str = "feature_service"
     id_nuevo: str = ""
     url_nueva: str = ""
     estado: str = STATUS_PENDING
@@ -38,9 +42,10 @@ class MigrationItem:
 
 
 class MigrationState:
-    def __init__(self, db_path: Path = STATE_DB):
+    def __init__(self, db_path: Path = STATE_DB, mapeo_path: Path | None = None):
         ensure_dirs()
         self.db_path = db_path
+        self.mapeo_path = mapeo_path or MAPEO_MIGRACION
         self._init_db()
         self._ensure_mapeo_csv()
 
@@ -58,6 +63,9 @@ class MigrationState:
                     titulo TEXT NOT NULL,
                     url_vieja TEXT,
                     carpeta_origen TEXT,
+                    item_type TEXT,
+                    fase INTEGER,
+                    driver TEXT,
                     id_nuevo TEXT,
                     url_nueva TEXT,
                     estado TEXT NOT NULL,
@@ -66,10 +74,26 @@ class MigrationState:
                 )
                 """
             )
+            self._migrate_schema(conn)
+
+    def _migrate_schema(self, conn: sqlite3.Connection) -> None:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(migration_items)").fetchall()
+        }
+        if "item_type" not in columns:
+            conn.execute(
+                "ALTER TABLE migration_items ADD COLUMN item_type TEXT DEFAULT 'Feature Service'"
+            )
+        if "fase" not in columns:
+            conn.execute("ALTER TABLE migration_items ADD COLUMN fase INTEGER DEFAULT 1")
+        if "driver" not in columns:
+            conn.execute(
+                "ALTER TABLE migration_items ADD COLUMN driver TEXT DEFAULT 'feature_service'"
+            )
 
     def _ensure_mapeo_csv(self) -> None:
-        if not MAPEO_MIGRACION.exists():
-            with open(MAPEO_MIGRACION, "w", newline="", encoding="utf-8") as f:
+        if not self.mapeo_path.exists():
+            with open(self.mapeo_path, "w", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(MAPEO_HEADERS)
 
     def upsert_from_inventory(self, items: list[MigrationItem]) -> None:
@@ -80,14 +104,18 @@ class MigrationState:
                     """
                     INSERT OR IGNORE INTO migration_items (
                         id_viejo, titulo, url_vieja, carpeta_origen,
+                        item_type, fase, driver,
                         id_nuevo, url_nueva, estado, error, updated_at
-                    ) VALUES (?, ?, ?, ?, '', '', ?, '', ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, '', ?)
                     """,
                     (
                         item.id_viejo,
                         item.titulo,
                         item.url_vieja,
                         item.carpeta_origen,
+                        item.item_type,
+                        item.fase,
+                        item.driver,
                         STATUS_PENDING,
                         now,
                     ),
@@ -95,16 +123,21 @@ class MigrationState:
                 conn.execute(
                     """
                     UPDATE migration_items
-                    SET titulo = ?, url_vieja = ?, carpeta_origen = ?, updated_at = ?
-                    WHERE id_viejo = ? AND estado != ?
+                    SET titulo = ?, url_vieja = ?, carpeta_origen = ?,
+                        item_type = ?, fase = ?, driver = ?, updated_at = ?
+                    WHERE id_viejo = ? AND estado NOT IN (?, ?)
                     """,
                     (
                         item.titulo,
                         item.url_vieja,
                         item.carpeta_origen,
+                        item.item_type,
+                        item.fase,
+                        item.driver,
                         now,
                         item.id_viejo,
                         STATUS_SUCCESS,
+                        STATUS_SKIPPED,
                     ),
                 )
 
@@ -120,7 +153,7 @@ class MigrationState:
                 f"""
                 SELECT * FROM migration_items
                 WHERE estado IN ({placeholders})
-                ORDER BY titulo
+                ORDER BY COALESCE(fase, 1), item_type, titulo
                 """,
                 statuses,
             ).fetchall()
@@ -145,6 +178,11 @@ class MigrationState:
         self._update_item(id_viejo, estado=STATUS_ERROR, error=error)
         self._append_mapeo_csv(item, "", "", "ERROR", error)
 
+    def set_skipped(self, id_viejo: str, reason: str) -> None:
+        item = self.get_item(id_viejo)
+        self._update_item(id_viejo, estado=STATUS_SKIPPED, error=reason)
+        self._append_mapeo_csv(item, "", "", "SKIP", reason)
+
     def get_item(self, id_viejo: str) -> MigrationItem:
         with self._connect() as conn:
             row = conn.execute(
@@ -153,6 +191,21 @@ class MigrationState:
         if row is None:
             raise KeyError(id_viejo)
         return self._row_to_item(row)
+
+    def get_successful_items(self, id_viejos: list[str]) -> list[MigrationItem]:
+        if not id_viejos:
+            return []
+        placeholders = ",".join("?" for _ in id_viejos)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM migration_items
+                WHERE id_viejo IN ({placeholders}) AND estado = ?
+                ORDER BY titulo
+                """,
+                (*id_viejos, STATUS_SUCCESS),
+            ).fetchall()
+        return [self._row_to_item(row) for row in rows]
 
     def _update_item(
         self,
@@ -195,7 +248,7 @@ class MigrationState:
         estado: str,
         error: str,
     ) -> None:
-        with open(MAPEO_MIGRACION, "a", newline="", encoding="utf-8") as f:
+        with open(self.mapeo_path, "a", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(
                 [
                     item.id_viejo,
@@ -215,7 +268,13 @@ class MigrationState:
             rows = conn.execute(
                 "SELECT estado, COUNT(*) AS c FROM migration_items GROUP BY estado"
             ).fetchall()
-        result = {STATUS_PENDING: 0, STATUS_IN_PROGRESS: 0, STATUS_SUCCESS: 0, STATUS_ERROR: 0}
+        result = {
+            STATUS_PENDING: 0,
+            STATUS_IN_PROGRESS: 0,
+            STATUS_SUCCESS: 0,
+            STATUS_ERROR: 0,
+            STATUS_SKIPPED: 0,
+        }
         for row in rows:
             result[row["estado"]] = row["c"]
         result["total"] = sum(result.values())
@@ -231,11 +290,15 @@ class MigrationState:
 
     @staticmethod
     def _row_to_item(row: sqlite3.Row) -> MigrationItem:
+        keys = row.keys()
         return MigrationItem(
             id_viejo=row["id_viejo"],
             titulo=row["titulo"],
             url_vieja=row["url_vieja"] or "",
             carpeta_origen=row["carpeta_origen"] or "",
+            item_type=(row["item_type"] if "item_type" in keys else None) or "Feature Service",
+            fase=int(row["fase"]) if "fase" in keys and row["fase"] is not None else 1,
+            driver=(row["driver"] if "driver" in keys else None) or "feature_service",
             id_nuevo=row["id_nuevo"] or "",
             url_nueva=row["url_nueva"] or "",
             estado=row["estado"],
