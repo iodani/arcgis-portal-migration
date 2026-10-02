@@ -4,7 +4,10 @@ Python tool to **migrate and clone ArcGIS Feature Services** from a source porta
 
 **Python 3.11** | **arcgis 2.4.x** | Feature Service migration | Batch workflow
 
-Detailed workflow documentation: [docs/WORKFLOW.md](docs/WORKFLOW.md)
+Detailed workflow documentation: [docs/WORKFLOW.md](docs/WORKFLOW.md)  
+Why IDs/URLs change after migration: [docs/URL_PRESERVATION.md](docs/URL_PRESERVATION.md)  
+`app.arcgis_upload` correlation + destino token: [docs/DB_CORRELATION.md](docs/DB_CORRELATION.md)  
+**Step-by-step execution guide (install → cleanup → migrate → DB update)**: [docs/GUIA_EJECUCION.md](docs/GUIA_EJECUCION.md)
 
 ---
 
@@ -84,75 +87,29 @@ Checklist before running:
 
 ---
 
-## Workflow — step by step
-
-### Step 1 — Validate connections (does not migrate)
+## Workflow — quick start
 
 ```bash
-python scripts/validate.py
+python scripts/validate.py   # check .env + connections (no writes)
+python scripts/audit.py      # inventory source portal -> inventario_con_carpetas.csv
+python scripts/prepare.py    # build inventario_migracion.csv (edit it, or use --db-dsn to filter automatically)
+python scripts/migrate.py    # batch migration (resumable, --retry-errors)
+python scripts/report.py     # summary + errores_migracion.csv
 ```
 
-Checks `.env` variables and login to source and destination. **Does not export, upload, or publish layers.**
-
-On completion shows summary + `NEXT -> python scripts/audit.py`
-
-### Step 2 — Audit
+That covers the core cutover (source → destination). Two optional helpers correlate the result with `app.arcgis_upload` and produce a reviewable `.sql` (never auto-executed):
 
 ```bash
-python scripts/audit.py
+python scripts/validate_db_correlation.py --db-dsn
+python scripts/generate_db_update.py --db-dsn
 ```
 
-Generates `data/output/inventario_con_carpetas.csv` with all Feature Services from the source portal.
+**For the full, detailed instructions** (every flag, what to check at each step, Camino A/B for DB access, cleanup helpers), see:
 
-### Step 3 — Prepare migration inventory
-
-```bash
-python scripts/prepare.py
-```
-
-Automatically copies `data/output/inventario_con_carpetas.csv` → `data/input/inventario_migracion.csv`.
-
-Then **edit the CSV and remove rows** for layers you do not want to migrate.
-
-To regenerate from scratch: `python scripts/prepare.py --force`
-
-Detailed documentation: [docs/WORKFLOW.md](docs/WORKFLOW.md)
-
-### Step 4 — Batch migration
-
-```bash
-python scripts/migrate.py
-```
-
-- Progress in console and `logs/migrate_*.log`
-- Persistent state in `state/migration_state.db`
-- Per-item mapping in `data/output/mapeo_migracion.csv`
-
-### Step 5 — Resume if interrupted
-
-```bash
-python scripts/migrate.py
-```
-
-- `success` → skipped
-- `in_progress` / `pending` → processed
-- `error` → skipped (use `--retry-errors` to retry)
-
-```bash
-python scripts/migrate.py --retry-errors
-```
-
-### Step 6 — Report
-
-```bash
-python scripts/report.py
-```
-
-Summary of total/success/error/pending. Exports `data/output/errores_migracion.csv`.
-
-### Step 7 — External database
-
-Use `data/output/mapeo_migracion.csv` in another environment to update IDs and URLs. See [docs/WORKFLOW.md](docs/WORKFLOW.md) for format and pseudocode.
+- [docs/GUIA_EJECUCION.md](docs/GUIA_EJECUCION.md) — step-by-step execution runbook (Spanish)
+- [docs/WORKFLOW.md](docs/WORKFLOW.md) — technical reference: phases, drivers, file formats, diagrams (English)
+- [docs/DB_CORRELATION.md](docs/DB_CORRELATION.md) — `app.arcgis_upload` correlation + token generation details
+- [docs/URL_PRESERVATION.md](docs/URL_PRESERVATION.md) — why IDs/URLs always change on a real migration
 
 ---
 
@@ -163,10 +120,15 @@ Use `data/output/mapeo_migracion.csv` in another environment to update IDs and U
 | Validate connections | `python scripts/validate.py` |
 | Audit | `python scripts/audit.py` |
 | Prepare inventory | `python scripts/prepare.py` |
+| Prepare inventory filtered by DB | `python scripts/prepare.py --db-dsn` |
 | Migration | `python scripts/migrate.py` |
 | Resume | `python scripts/migrate.py` |
 | Retry errors | `python scripts/migrate.py --retry-errors` |
 | Report | `python scripts/report.py` |
+| Validate DB correlation | `python scripts/validate_db_correlation.py --db-dsn` |
+| Generate DB update SQL | `python scripts/generate_db_update.py --db-dsn` |
+| Cleanup destination test items | `python scripts/cleanup_destino.py --folder <carpeta>` |
+| Cleanup local generated files | `python scripts/cleanup_local.py --yes` |
 
 ---
 
@@ -174,8 +136,9 @@ Use `data/output/mapeo_migracion.csv` in another environment to update IDs and U
 
 ```
 migracion_esri/
-├── docs/              # WORKFLOW.md
-├── scripts/           # validate, audit, prepare, migrate, report
+├── docs/              # GUIA_EJECUCION.md, WORKFLOW.md, URL_PRESERVATION.md, DB_CORRELATION.md
+├── scripts/           # validate, audit, prepare, migrate, report, validate_db_correlation,
+│                      # generate_db_update, cleanup_destino, cleanup_local
 ├── src/migracion_esri/
 ├── data/
 │   ├── input/         # inventario_migracion.csv (local, gitignored)
@@ -195,5 +158,7 @@ migracion_esri/
 | `data/input/inventario_migracion.csv` | Curated list to migrate |
 | `data/output/mapeo_migracion.csv` | Old → new ID/URL mapping |
 | `data/output/errores_migracion.csv` | Items that could not be cloned |
+| `data/output/validacion_correlacion.csv` | DB correlation key check (optional) |
+| `data/output/update_arcgis_upload.sql` | `app.arcgis_upload` UPDATE statements for manual review (optional) |
 | `state/migration_state.db` | State for resume |
 | `logs/<script>_*.log` | Detailed log with error context |

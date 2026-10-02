@@ -1,5 +1,5 @@
+import logging
 from dataclasses import dataclass
-from typing import Callable
 
 
 @dataclass
@@ -9,6 +9,22 @@ class WorkflowSummary:
     errors: int = 0
     next_command: str = ""
     next_hint: str = ""
+
+
+def _log_to_file_only(logger: logging.Logger, level: int, text: str) -> None:
+    """Write to FileHandler(s) only — avoids duplicating print() on console."""
+    record = logger.makeRecord(
+        logger.name,
+        level,
+        "(workflow_ui)",
+        0,
+        "\n%s",
+        (text,),
+        None,
+    )
+    for handler in logger.handlers:
+        if isinstance(handler, logging.FileHandler):
+            handler.emit(record)
 
 
 def print_summary(summary: WorkflowSummary, logger=None) -> None:
@@ -30,7 +46,7 @@ def print_summary(summary: WorkflowSummary, logger=None) -> None:
     text = "\n".join(block)
     print(text)
     if logger:
-        logger.info("\n%s", text)
+        _log_to_file_only(logger, logging.INFO, text)
 
 
 def print_failure_summary(script: str, error: str, logger=None) -> None:
@@ -46,4 +62,4 @@ def print_failure_summary(script: str, error: str, logger=None) -> None:
     text = "\n".join(block)
     print(text)
     if logger:
-        logger.error("\n%s", text)
+        _log_to_file_only(logger, logging.ERROR, text)

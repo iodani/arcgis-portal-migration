@@ -78,8 +78,8 @@ def main() -> int:
                 f" Tamaño total (MB): {round(total_mb, 2)}",
                 f" Archivo: {INVENTARIO_CARPETAS}",
             ],
-            next_command="python scripts/prepare_pilot.py",
-            next_hint="Generar inventario piloto (1 por Type) o prepare.py para inventario completo",
+            next_command="python scripts/prepare.py",
+            next_hint="Generar inventario de migracion",
         )
         print_summary(summary, logger)
         return 0

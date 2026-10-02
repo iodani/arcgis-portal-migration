@@ -191,10 +191,7 @@ def main() -> int:
                 next_cmd += f" --pilot-folder {args.pilot_folder}"
             next_hint = f"Quedan {pending} items pendientes; reejecute para continuar"
         elif args.pilot_folder:
-            next_cmd = (
-                f"python scripts/cleanup_pilot.py --inventory {args.inventory} "
-                f"--pilot-folder {args.pilot_folder}"
-            )
+            next_cmd = f"python scripts/cleanup_destino.py --folder {args.pilot_folder}"
             next_hint = "Eliminar items de prueba en destino"
         else:
             next_cmd = "python scripts/report.py"

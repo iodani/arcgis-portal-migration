@@ -52,6 +52,14 @@ def main() -> int:
                     item.error,
                 )
 
+        pending = counts[STATUS_PENDING] + counts[STATUS_IN_PROGRESS]
+        if pending > 0 or counts[STATUS_ERROR] > 0:
+            next_cmd = "python scripts/migrate.py --retry-errors" if counts[STATUS_ERROR] > 0 else "python scripts/migrate.py"
+            next_hint = "Quedan items pendientes o con error; complete la migracion antes de actualizar la BD"
+        else:
+            next_cmd = "python scripts/validate_db_correlation.py --db-dsn"
+            next_hint = "Luego: python scripts/generate_db_update.py --db-dsn"
+
         summary = WorkflowSummary(
             script="report",
             lines=[
@@ -59,13 +67,13 @@ def main() -> int:
                 f" Exitos: {counts[STATUS_SUCCESS]}",
                 f" Errores: {counts[STATUS_ERROR]}",
                 f" Skipped: {counts[STATUS_SKIPPED]}",
-                f" Pendientes: {counts[STATUS_PENDING] + counts[STATUS_IN_PROGRESS]}",
+                f" Pendientes: {pending}",
                 f" Mapeo CSV: {MAPEO_MIGRACION}",
                 f" Errores CSV: {ERRORES_MIGRACION}",
             ],
             errors=counts[STATUS_ERROR],
-            next_command="(externo) usar mapeo_migracion.csv en entorno de BD",
-            next_hint="Este proyecto no actualiza la BD; entregue el CSV al equipo de datos",
+            next_command=next_cmd,
+            next_hint=next_hint,
         )
         print_summary(summary, logger)
         return 0

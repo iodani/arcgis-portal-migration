@@ -1,25 +1,24 @@
 # ArcGIS Migration Workflow
 
-Reference guide for the full workflow to clone portal content between ArcGIS portals (multi-type with drivers).
+Reference guide for migrating hosted content between ArcGIS portals. The **default path is production** (full inventory → migrate → mapeo CSV for DB updates).
+
+> Looking for copy-paste, step-by-step execution instructions (install → cleanup → migrate → DB update)? See [GUIA_EJECUCION.md](GUIA_EJECUCION.md). This document is the technical reference behind those steps.
 
 ---
 
-## Flow diagram
+## Flow diagram (production)
 
 ```mermaid
 flowchart TD
   Setup[Setup venv and .env] --> Validate[validate.py]
   Validate --> Audit[audit.py]
-  Audit --> PilotChoice{Pilot or full?}
-  PilotChoice -->|Pilot| PreparePilot[prepare_pilot.py]
-  PilotChoice -->|Full| Prepare[prepare.py]
-  PreparePilot --> MigratePilot[migrate.py --pilot-folder]
-  MigratePilot --> Cleanup[cleanup_pilot.py]
-  Cleanup --> PilotReport[prepare_pilot.py --report]
+  Audit --> Prepare[prepare.py]
   Prepare --> Curate[User edits CSV]
   Curate --> Migrate[migrate.py]
   Migrate --> Report[report.py]
-  Report --> External[External project: mapeo_migracion.csv]
+  Report --> ValidateDb[validate_db_correlation.py]
+  ValidateDb --> GenerateSql[generate_db_update.py]
+  GenerateSql --> External["update_arcgis_upload.sql (manual review by DBA / data team)"]
 ```
 
 ---
@@ -29,42 +28,32 @@ flowchart TD
 | Phase | Command | Input | Output | NEXT |
 |-------|---------|-------|--------|------|
 | 1 Validate | `python scripts/validate.py` | `.env` | log | `audit.py` |
-| 2 Audit | `python scripts/audit.py` | source portal | `inventario_con_carpetas.csv` | `prepare_pilot.py` or `prepare.py` |
-| 3 Prepare | `python scripts/prepare.py` | audited inventory | `inventario_migracion.csv` | edit CSV |
+| 2 Audit | `python scripts/audit.py` | source portal | `inventario_con_carpetas.csv` | `prepare.py` |
+| 3 Prepare | `python scripts/prepare.py` (or `--db-dsn`/`--arcgis-upload-csv` to filter by `app.arcgis_upload`) | audited inventory | `inventario_migracion.csv` | edit CSV (skip if filtered) |
 | 4 Curate | manual | input CSV | edited CSV | `migrate.py` |
 | 5 Migrate | `python scripts/migrate.py` | curated CSV | `mapeo_migracion.csv`, `state.db` | `report.py` |
 | 6 Report | `python scripts/report.py` | `state.db` | `errores_migracion.csv` | external project |
+| 7a Validate DB correlation | `python scripts/validate_db_correlation.py --db-dsn` | `app.arcgis_upload` + source portal | `validacion_correlacion.csv` | `generate_db_update.py` |
+| 7b Generate DB update | `python scripts/generate_db_update.py --db-dsn` | `mapeo_migracion.csv` + `app.arcgis_upload` | `update_arcgis_upload.sql` | DBA runs the SQL manually |
 
 ---
 
-## Pilot workflow (1 item per ArcGIS Type)
+## Why IDs and URLs change (read this first)
 
-Use this **before** full migration to test all ~44 content types without polluting the destination portal.
+A **real migration** (independent hosted data on the destination portal) **always** creates new item IDs and new Feature Service REST URLs. There is no ArcGIS Online setting that keeps the same `servicesN.arcgis.com/.../FeatureServer` URL when publishing into another org.
 
-| Phase | Command |
-|-------|---------|
-| A Validate | `python scripts/validate.py` |
-| B Audit | `python scripts/audit.py` |
-| C Prepare pilot | `python scripts/prepare_pilot.py --force` |
-| D Migrate pilot | `python scripts/migrate.py --inventory data/input/inventario_pilot.csv --pilot-folder MIGRACION_PILOTO_TIPOS` |
-| E Cleanup | `python scripts/cleanup_pilot.py --inventory data/input/inventario_pilot.csv --pilot-folder MIGRACION_PILOTO_TIPOS` |
-| F Matrix | `python scripts/prepare_pilot.py --report` |
+| Method | What it does | URL / ID |
+|--------|--------------|----------|
+| This toolkit (`FeatureServiceDriver`) | export FGDB → upload → publish | **New** ID and URL |
+| `clone_items(copy_data=True)` | Recreate hosted layer on destination | New ID / URL |
+| ArcGIS Assistant **simple / reference copy** | New portal item that **points at the source service** | **Same URL** (data still on source — not a cutover) |
+| ArcGIS Assistant **full copy** | Independent replica on destination | New ID / URL |
 
-Pilot uses isolated state: `state/pilot_state.db` and `data/output/mapeo_pilot.csv`.
+**Implication:** if Assistant kept the same URL when you dragged one service, that was almost certainly a **reference copy**, not ownership of the data on the new portal. For cutover to Location Platform / a new org, you still need `data/output/mapeo_migracion.csv` to update application databases with the new IDs and URLs.
 
-Expected pilot inventory: **~44 rows** (one per ArcGIS `Type`, not one per internal driver).
+`preserve_item_id` / `item_id=` apply only to **Enterprise → Enterprise**, not AGOL destinations — and even then the hosted service URL still changes on republish.
 
-| Result in mapeo | Meaning |
-|-----------------|---------|
-| `EXITO` | Type migrated successfully |
-| `SKIP` | Type excluded by design (API Key, Hub, etc.) |
-| `ERROR` | Migration attempted and failed |
-
-Dry-run cleanup:
-
-```bash
-python scripts/cleanup_pilot.py --dry-run
-```
+See also: [URL_PRESERVATION.md](URL_PRESERVATION.md).
 
 ---
 
@@ -103,7 +92,7 @@ Generates `data/output/inventario_con_carpetas.csv` with columns:
 
 - `Titulo`, `ID_Viejo`, `URL_Vieja`, `Carpeta_Origen`, `Tamaño_MB`, `Type`, `Fase`, `Driver`
 
-Read-only access to the source portal. Inventories **all org content** (~2971 items, ~45 types).
+Read-only access to the source portal. Inventories **all org content**.
 
 ---
 
@@ -119,6 +108,24 @@ Automatically copies the audited inventory to `data/input/inventario_migracion.c
 
 If the file already exists, aborts (use `--force` to overwrite).
 
+### Optional: filter automatically using `app.arcgis_upload`
+
+```bash
+python scripts/prepare.py --db-dsn
+# or: python scripts/prepare.py --arcgis-upload-csv path/to/export.csv
+```
+
+Instead of copying the full audited inventory, keeps only the rows whose
+`ID_Viejo`/`URL_Vieja` match a `layer_id`/`service_url` in `app.arcgis_upload`
+(default join key: `layer_id`; `--join-key service_url` is available).
+Rows present in `arcgis_upload` but missing from the audit (e.g. private
+items not visible to the auditing account) are resolved with a direct
+`content.get(layer_id)` lookup against the source portal before being
+reported as unresolved in `data/output/sin_match_inventario_db.csv`.
+Reuses the same `db_client.py` (and `--only-system-account`) as
+`validate_db_correlation.py`/`generate_db_update.py` — see
+[DB_CORRELATION.md](DB_CORRELATION.md).
+
 ---
 
 ## Phase 4 — Curate inventory (manual)
@@ -129,23 +136,24 @@ If the file already exists, aborts (use `--force` to overwrite).
 
 Reference template: `data/input/inventario_migracion.example.csv`
 
+For a Feature-Service-only cutover, keep rows where `Type` is `Feature Service` (and any related types you explicitly need).
+
 ---
 
 ## Phase 5 — Batch migration
 
 ```bash
 python scripts/migrate.py
-python scripts/migrate.py --inventory data/input/inventario_pilot.csv --pilot-folder MIGRACION_PILOTO_TIPOS
 ```
 
 For each item, the router selects a driver by `Type`:
 
-1. **Feature Service** — export FGDB → upload → publish (unchanged)
+1. **Feature Service** — export FGDB → upload → publish
 2. **Other types** — `clone_items(copy_data=True)`
 3. **Skip types** — registered as SKIP in mapeo
 
-Persistent state in `state/migration_state.db` (or `state/pilot_state.db` for pilot).
-Mapping in `data/output/mapeo_migracion.csv` (or `mapeo_pilot.csv` for pilot).
+Persistent state: `state/migration_state.db`  
+Mapping: `data/output/mapeo_migracion.csv`
 
 ### Resume / retry
 
@@ -217,6 +225,36 @@ for _, row in ok.iterrows():
 
 ---
 
+## Phase 7a — Validate DB correlation (optional helper)
+
+```bash
+python scripts/validate_db_correlation.py --db-dsn
+# or: python scripts/validate_db_correlation.py --arcgis-upload-csv path/to/export.csv
+```
+
+Read-only. Confirms, against the **source** portal, whether `app.arcgis_upload.layer_id` is the source item's `itemId` and `service_url` is its `url` — the correlation key assumed by Phase 7b. See [DB_CORRELATION.md](DB_CORRELATION.md).
+
+Requires optional `.env` vars: `PGDSN` (full Postgres DSN, URI or keyword/value), `PGSCHEMA` (not part of the core migration flow).
+
+---
+
+## Phase 7b — Generate DB update SQL (optional helper)
+
+```bash
+python scripts/generate_db_update.py --db-dsn
+# or: python scripts/generate_db_update.py --arcgis-upload-csv path/to/export.csv
+```
+
+Joins `mapeo_migracion.csv` (`Estado == EXITO`) against `app.arcgis_upload` (default join key: `layer_id == ID_Viejo`; `--join-key service_url` is available as an alternative) and writes `data/output/update_arcgis_upload.sql` with one `UPDATE app.arcgis_upload SET service_url = ..., layer_id = ... WHERE id = ...` per match, wrapped in `BEGIN;`/`COMMIT;`.
+
+By default (unless `--no-token`), it also requests one fresh ArcGIS token for `DESTINO_USER`/`DESTINO_PASS` (via REST `generateToken` against `DESTINO_URL`, not the stale **source**-portal token already stored in `access_token`) and adds `username`, `access_token`, `token_expires_at` to each `UPDATE`. Default expiration: 60 minutes, configurable via `TOKEN_EXPIRATION_MINUTES` in `.env` or `--token-expiration-minutes`. The resulting `.sql` therefore holds a live credential while the token is valid — handle it as a secret and apply it before expiration.
+
+This script **never executes SQL against the database** — it only reads (to match) and writes the `.sql` file; requesting the token is a read-only auth call against ArcGIS's REST API, not a write to either portal. The data team/DBA reviews and runs the `.sql` manually, consistent with the rest of this toolkit ("this tool does not update databases").
+
+Unmatched `EXITO` rows are reported in `data/output/sin_match_arcgis_upload.csv` so nothing is silently dropped.
+
+---
+
 ## RAIZ folder
 
 `RAIZ` is an **internal label** for items that sit at the root of the source portal (no assigned folder).
@@ -254,15 +292,45 @@ These files are created when running the workflow and **are not part of the sour
 |------|--------------|
 | `data/output/inventario_con_carpetas.csv` | `audit.py` |
 | `data/input/inventario_migracion.csv` | `prepare.py` + manual edit |
-| `data/input/inventario_pilot.csv` | `prepare_pilot.py` (runtime, gitignored) |
-| `data/input/inventario_pilot.example.csv` | template (committed) |
 | `data/output/mapeo_migracion.csv` | `migrate.py` |
-| `data/output/mapeo_pilot.csv` | `migrate.py` (pilot mode) |
-| `data/output/pilot_matrix.csv` | `prepare_pilot.py --report` |
 | `data/output/errores_migracion.csv` | `report.py` |
+| `data/output/sin_match_inventario_db.csv` | `prepare.py` (solo si usa `--db-dsn`/`--arcgis-upload-csv` y hay filas sin resolver) |
+| `data/output/validacion_correlacion.csv` | `validate_db_correlation.py` |
+| `data/output/update_arcgis_upload.sql` | `generate_db_update.py` |
+| `data/output/sin_match_arcgis_upload.csv` | `generate_db_update.py` (solo si hay filas sin match) |
 | `state/migration_state.db` | `migrate.py` |
-| `state/pilot_state.db` | `migrate.py` (pilot mode) |
 | `logs/<script>_*.log` | all scripts |
 | `temp/*.zip` | `migrate.py` (temporary) |
 
 These files are excluded from source control.
+
+---
+
+## Isolated test runs and cleanup
+
+### Isolated destination folder (optional)
+
+```bash
+python scripts/migrate.py --inventory <csv_de_prueba.csv> --pilot-folder <CARPETA_DESTINO>
+```
+
+Migrates a small, user-curated CSV into an isolated destination folder, with its own state (`state/pilot_state.db`) and mapping (`data/output/mapeo_pilot.csv`), without touching the main `migration_state.db` / `mapeo_migracion.csv`. Useful to try the drivers on a handful of items before a full production run.
+
+### Cleanup destination (test items)
+
+```bash
+python scripts/cleanup_destino.py --folder <CARPETA_DESTINO>
+python scripts/cleanup_destino.py --item-id <itemId> [--item-id <itemId> ...]
+python scripts/cleanup_destino.py --folder <CARPETA_DESTINO> --dry-run
+```
+
+Deletes items in the **destination** portal by folder and/or by explicit `itemId`. It does not depend on any migration state, so it also works for items created outside this toolkit (e.g. manual test items). Always targets `DESTINO_*` from `.env` — never the source portal.
+
+### Cleanup local generated files
+
+```bash
+python scripts/cleanup_local.py --dry-run
+python scripts/cleanup_local.py --yes
+```
+
+Clears `logs/`, `data/output/*`, `state/*.db` and `temp/*` to start a test run from a clean slate. Only touches local files — never ArcGIS Online or any database.

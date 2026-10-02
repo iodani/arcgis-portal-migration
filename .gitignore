@@ -2,6 +2,9 @@
 .venv/
 .env
 
+# IDE (JetBrains) - config local de cada maquina, no se comparte
+.idea/
+
 # Python
 __pycache__/
 *.py[cod]
