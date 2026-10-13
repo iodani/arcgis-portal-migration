@@ -6,7 +6,7 @@ Python tool to **migrate and clone ArcGIS Feature Services** from a source porta
 
 Detailed workflow documentation: [docs/WORKFLOW.md](docs/WORKFLOW.md)  
 Why IDs/URLs change after migration: [docs/URL_PRESERVATION.md](docs/URL_PRESERVATION.md)  
-`app.arcgis_upload` correlation + destino token: [docs/DB_CORRELATION.md](docs/DB_CORRELATION.md)  
+`app.arcgis_upload` correlation: [docs/DB_CORRELATION.md](docs/DB_CORRELATION.md)  
 **Step-by-step execution guide (install → cleanup → migrate → DB update)**: [docs/GUIA_EJECUCION.md](docs/GUIA_EJECUCION.md)
 
 ---
@@ -102,13 +102,15 @@ That covers the core cutover (source → destination). Two optional helpers corr
 ```bash
 python scripts/validate_db_correlation.py --db-dsn
 python scripts/generate_db_update.py --db-dsn
+# or, to get a Yii migration (.php) for the fdsu project instead of the .sql:
+python scripts/generate_db_update.py --db-dsn --format yii
 ```
 
 **For the full, detailed instructions** (every flag, what to check at each step, Camino A/B for DB access, cleanup helpers), see:
 
 - [docs/GUIA_EJECUCION.md](docs/GUIA_EJECUCION.md) — step-by-step execution runbook (Spanish)
 - [docs/WORKFLOW.md](docs/WORKFLOW.md) — technical reference: phases, drivers, file formats, diagrams (English)
-- [docs/DB_CORRELATION.md](docs/DB_CORRELATION.md) — `app.arcgis_upload` correlation + token generation details
+- [docs/DB_CORRELATION.md](docs/DB_CORRELATION.md) — `app.arcgis_upload` correlation (token columns are set to empty string)
 - [docs/URL_PRESERVATION.md](docs/URL_PRESERVATION.md) — why IDs/URLs always change on a real migration
 
 ---
@@ -127,6 +129,7 @@ python scripts/generate_db_update.py --db-dsn
 | Report | `python scripts/report.py` |
 | Validate DB correlation | `python scripts/validate_db_correlation.py --db-dsn` |
 | Generate DB update SQL | `python scripts/generate_db_update.py --db-dsn` |
+| Generate Yii migration instead | `python scripts/generate_db_update.py --db-dsn --format yii` |
 | Cleanup destination test items | `python scripts/cleanup_destino.py --folder <carpeta>` |
 | Cleanup local generated files | `python scripts/cleanup_local.py --yes` |
 
@@ -160,5 +163,6 @@ migracion_esri/
 | `data/output/errores_migracion.csv` | Items that could not be cloned |
 | `data/output/validacion_correlacion.csv` | DB correlation key check (optional) |
 | `data/output/update_arcgis_upload.sql` | `app.arcgis_upload` UPDATE statements for manual review (optional) |
+| `data/output/m{timestamp}_update_arcgis_upload.php` | Same updates as a Yii migration, with `--format yii` (optional) |
 | `state/migration_state.db` | State for resume |
 | `logs/<script>_*.log` | Detailed log with error context |

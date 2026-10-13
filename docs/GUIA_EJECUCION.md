@@ -2,8 +2,8 @@
 
 Guia operativa paso a paso, de principio a fin, para ejecutar este toolkit
 sobre Git Bash (Windows). Cubre todo el flujo: desde instalar dependencias
-hasta dejar listo el `.sql` que actualiza `app.arcgis_upload` en el portal
-destino.
+hasta dejar listo el `.sql` (o, alternativamente, un migration de Yii)
+que actualiza `app.arcgis_upload` en el portal destino.
 
 El flujo es **el mismo** sin importar como se acceda a `app.arcgis_upload`.
 Solo se bifurca en dos caminos en los pasos 7 y 8 (los que leen la tabla):
@@ -20,8 +20,9 @@ Elige un camino (o prueba ambos) en los pasos 7 y 8. El resto de los pasos
 
 Ningun script de este toolkit ejecuta `INSERT`/`UPDATE`/`DELETE` sobre la
 base de datos de la plataforma. El unico artefacto que modifica
-`app.arcgis_upload` es el `.sql` generado en el Paso 8, y se ejecuta
-manualmente fuera de este toolkit.
+`app.arcgis_upload` es el `.sql` (o el migration `.php` con `--format
+yii`) generado en el Paso 8, y se aplica manualmente fuera de este
+toolkit.
 
 ---
 
@@ -36,8 +37,8 @@ manualmente fuera de este toolkit.
 - [ ] Paso 5 — `migrate.py` (migracion masiva)
 - [ ] Paso 6 — `report.py` (reporte final)
 - [ ] Paso 7 — `validate_db_correlation.py` (Camino A o B)
-- [ ] Paso 8 — `generate_db_update.py` (Camino A o B)
-- [ ] Paso 9 — Entregar `.sql` al DBA / equipo de datos
+- [ ] Paso 8 — `generate_db_update.py` (Camino A o B; `--format sql` o `--format yii`)
+- [ ] Paso 9 — Entregar `.sql` o `.php` al DBA / equipo de datos
 - [ ] Paso 10 — Verificacion final
 
 ---
@@ -284,56 +285,81 @@ python scripts/generate_db_update.py --arcgis-upload-csv data/input/arcgis_uploa
 |---|---|
 | `--only-system-account` | Solo filas `is_system_account = true` (requiere `--db-dsn`) |
 | `--join-key service_url` | Alternativa si el Paso 7 mostro que la clave real es `service_url` en vez de `layer_id` |
-| `--output <ruta>` | Cambiar donde se escribe el `.sql` (default `data/output/update_arcgis_upload.sql`) |
-| `--no-token` | Generar el `.sql` sin tocar `access_token`/`username`/`token_expires_at` (solo `service_url`+`layer_id`) |
-| `--token-expiration-minutes 120` | Cambiar la expiracion del token nuevo (default: `TOKEN_EXPIRATION_MINUTES` en `.env`, o 60) |
+| `--output <ruta>` | Cambiar donde se escribe el archivo (default `data/output/update_arcgis_upload.sql`, o `data/output/m{timestamp}_update_arcgis_upload.php` con `--format yii`) |
+| `--no-token` | No tocar `access_token`/`username`/`token_expires_at` (solo `service_url`+`layer_id`) |
+| `--format yii` | En vez del `.sql`, generar **solo** un migration de Yii (`.php`) — ver seccion abajo |
 
-### Token nuevo de DESTINO (`access_token`)
+### Token de origen anulado (`access_token` / `token_expires_at`)
 
 El `access_token` guardado hoy en `arcgis_upload` es del portal **ORIGEN**
-y ya no sirve una vez el servicio esta migrado a DESTINO. Por eso, salvo
-que uses `--no-token`, el comando de arriba **tambien** pide un token
-nuevo (REST `generateToken`) para `DESTINO_USER`/`DESTINO_PASS` (de
-`.env`) y lo agrega al `UPDATE` de cada fila junto con
-`username = DESTINO_USER`. Es un solo token por corrida (misma cuenta
-destino para todas las filas), con expiracion default de **60 minutos**.
-
-**Importante:** una vez generado el `.sql`, aplicalo pronto (dentro del
-plazo de expiracion que se muestra en el resumen y en el encabezado del
-archivo) — si pasa ese tiempo, el `access_token` embebido ya estara
-vencido y habra que regenerar el `.sql`. Ademas, trata el `.sql` como un
-**secreto** mientras tenga el token: no lo compartas por chat/ticket, no
-lo subas al repo, y borralo despues de aplicarlo (ver tambien
+y ya no sirve una vez el servicio esta migrado a DESTINO. Salvo
+`--no-token`, cada `UPDATE` pone `access_token = ''`,
+`token_expires_at = ''` (cadena vacia: las columnas son `NOT NULL`) y `username = DESTINO_USER`. Este script **no
+genera ni embebe** un token: el archivo no es un secreto. El token real
+de DESTINO lo escribe despues un comando PHP en el proyecto `fdsu` (ver
 [DB_CORRELATION.md](DB_CORRELATION.md)).
+
+### Alternativa: generar un migration de Yii (`--format yii`)
+
+Si vas a aplicar el cambio en el proyecto `fdsu` (Yii 1.1), pedi
+directamente un migration en vez del `.sql`:
+
+```bash
+# Camino A
+python scripts/generate_db_update.py --db-dsn --format yii
+
+# Camino B
+python scripts/generate_db_update.py --arcgis-upload-csv data/input/arcgis_upload_export.csv --format yii
+```
+
+Con `--format yii` el script **no** escribe el `.sql`: en su lugar deja
+un `.php` en `data/output/` (nombre `m{YYMMDD}_{HHMMSS}_update_arcgis_upload.php`,
+convencion de Yii), con los mismos `UPDATE` que generaria el `.sql` pero
+usando `Yii::app()->dbWrite->createCommand(...)->execute();` por fila
+(con contador/`echo` de progreso) y `(new CacheDbSchema)->invalidate(['arcgis_upload']);`
+al final — igual que las migraciones de datos reales en
+`fdsu/console/migrations/`. El Paso 9 cambia segun el formato elegido.
 
 ### Que revisar
 
-- `data/output/update_arcgis_upload.sql`: un `UPDATE app.arcgis_upload ...`
-  por cada fila emparejada, envuelto en `BEGIN;`/`COMMIT;` (con
-  `access_token` nuevo incluido, salvo `--no-token`).
+- `data/output/update_arcgis_upload.sql` (default) o `data/output/m..._update_arcgis_upload.php`
+  (con `--format yii`): un `UPDATE app.arcgis_upload ...` por cada fila
+  emparejada (`access_token` y `token_expires_at` en `''`, salvo `--no-token`).
 - `data/output/sin_match_arcgis_upload.csv` (si existe): filas `EXITO` del
   mapeo que **no** encontraron fila en `arcgis_upload` — revisar antes de
   continuar, no se pierden en silencio.
 
 Este script **no ejecuta nada** contra la base de datos; solo lee (para
-emparejar) y escribe el `.sql`. Pedir el token nuevo es una llamada de
-autenticacion de solo lectura contra la REST API de ArcGIS (no modifica
-nada en los portales).
+emparejar) y escribe el archivo.
 
 ---
 
-## Paso 9 — Entregar y ejecutar el SQL
+## Paso 9 — Entregar y ejecutar el resultado
+
+### Si usaste el formato `.sql` (default)
 
 1. Entrega `data/output/update_arcgis_upload.sql` al equipo de
    datos/DBA (o ejecutalo tu mismo si tienes permiso de escritura).
-   Recuerda: si incluye `access_token`, es un secreto con expiracion —
-   coordina para aplicarlo pronto.
 2. Revisa el contenido antes de correrlo — son `UPDATE` por `id` de
    `arcgis_upload`, dentro de una transaccion `BEGIN;`/`COMMIT;`.
+   `access_token` y `token_expires_at` quedan en `''`.
 3. Ejecutalo contra la base de datos real (fuera de este toolkit, p. ej.
-   con `psql` o el cliente que use el equipo de datos), antes de que el
-   token embebido expire.
-4. Borra o resguarda el `.sql` una vez aplicado (contenia un token valido).
+   con `psql` o el cliente que use el equipo de datos).
+4. Despues, el comando PHP de `fdsu` escribe el token de DESTINO.
+
+### Si usaste `--format yii`
+
+1. Revisa el `.php` generado en `data/output/` (misma logica/datos que el
+   `.sql`: token y expiracion en `''`).
+2. Copialo a `console/migrations/` dentro del repo `fdsu`.
+3. Desde la raiz de `fdsu`, ejecuta manualmente:
+   ```bash
+   php console/yiic migrate
+   ```
+4. Despues, el comando PHP de `fdsu` escribe el token de DESTINO.
+
+Este toolkit **no copia ni ejecuta** el `.php` en `fdsu`; ese paso lo
+hace el usuario/DBA manualmente, igual que con el `.sql`.
 
 ---
 

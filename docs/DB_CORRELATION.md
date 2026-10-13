@@ -115,9 +115,9 @@ Flags relevantes:
 | `--arcgis-upload-csv` | — | Alternativa sin credenciales de BD: CSV exportado manualmente con columnas `id, client_code, service_name, item_type_code, layer_id, service_url` |
 | `--join-key` | `layer_id` | `layer_id` (default) o `service_url` |
 | `--only-system-account` | `false` | Filtra solo filas `is_system_account = true` (requiere `--db-dsn`) |
-| `--output` | `data/output/update_arcgis_upload.sql` | Ruta del `.sql` generado |
-| `--no-token` | `false` | No generar/incluir `access_token` nuevo (solo `service_url` + `layer_id`) |
-| `--token-expiration-minutes` | `TOKEN_EXPIRATION_MINUTES` en `.env`, o `60` | Expiracion (minutos) del token nuevo pedido para DESTINO |
+| `--format` | `sql` | `sql` (default) genera el `.sql`; `yii` genera **solo** un migration de Yii (`.php`), ver seccion abajo |
+| `--output` | `data/output/update_arcgis_upload.sql` (o `data/output/m{timestamp}_update_arcgis_upload.php` con `--format yii`) | Ruta del archivo generado |
+| `--no-token` | `false` | No tocar `access_token`/`username`/`token_expires_at` (solo `service_url` + `layer_id`) |
 
 Salida:
 
@@ -137,55 +137,122 @@ SET service_url = 'https://services7.arcgis.com/XXXX/arcgis/rest/services/migrat
 WHERE id = 45;
 ```
 
-### Token nuevo para DESTINO (`access_token` / `username` / `token_expires_at`)
+### Token de origen anulado (`access_token` / `token_expires_at`)
 
 El `access_token` que hoy tiene `arcgis_upload` fue emitido contra el
 **portal ORIGEN**: una vez migrado el Feature Service a DESTINO, ese token
-no sirve para operar sobre el servicio nuevo. Por eso, salvo que se pase
-`--no-token`, `generate_db_update.py` ademas:
+no sirve. Este script **no genera ni embebe** un token nuevo (el archivo
+no queda como secreto). Salvo `--no-token`, cada `UPDATE` deja:
 
-1. Pide **un** token nuevo (REST `generateToken`, no la libreria `arcgis`)
-   para la cuenta `DESTINO_USER`/`DESTINO_PASS` (de `.env`) contra
-   `DESTINO_URL`. Se pide una sola vez por corrida (no una vez por fila):
-   todas las filas migradas quedan con el mismo `access_token`, porque
-   todas se publicaron con la misma cuenta de destino.
-2. Agrega al `UPDATE` de cada fila emparejada: `username = DESTINO_USER`
-   y `access_token = '<token nuevo>'` (comillas simples, igual manejo que
-   `service_url`/`layer_id`) y `token_expires_at = <epoch>` (numerico, sin
-   comillas — ver punto 4).
-3. La expiracion default es **60 minutos (1 hora)**, configurable con
-   `TOKEN_EXPIRATION_MINUTES` en `.env` o `--token-expiration-minutes`.
-4. `token_expires_at` se escribe en **formato numerico** (epoch Unix en
-   segundos, ej. `1827843908`), sin comillas -- igual que lo espera la
-   columna en `app.arcgis_upload`. El comentario arriba del `UPDATE` en el
-   `.sql` incluye tambien la hora legible en UTC, solo como referencia.
+- `username = DESTINO_USER` (cuenta de `.env`)
+- `access_token = ''`
+- `token_expires_at = ''`
 
-Ejemplo de UPDATE con token:
+Cadena vacia, no `NULL`: ambas columnas son `NOT NULL`.
+
+El token real de DESTINO lo escribe despues un comando aparte en el
+proyecto `fdsu`, fuera de este toolkit.
 
 ```sql
 UPDATE app.arcgis_upload
 SET service_url = 'https://services7.arcgis.com/XXXX/arcgis/rest/services/migration_test/FeatureServer',
     layer_id    = '9ffa9ced3fdc46248a4f3700ae8cc685',
     username    = 'it-esri-admin',
-    access_token = 'AbC123...tokenReal...',
-    token_expires_at = 1827843908
+    access_token = '',
+    token_expires_at = ''
 WHERE id = 45;
 ```
 
-**Advertencia de seguridad:** con esta opcion activa (default), el `.sql`
-generado contiene un token valido de ArcGIS — tratelo como un secreto:
-no lo adjunte en tickets/chats, no lo deje en el repo, y bórrelo despues
-de aplicarlo. Ademas, el token expira: el `.sql` debe aplicarse **antes**
-de la hora de expiracion indicada en el encabezado del archivo y en el
-resumen que imprime el script, o quedara con un `access_token` ya vencido.
+### Alternativa: generar un migration de Yii en vez del `.sql` (`--format yii`)
+
+Si el equipo de datos trabaja con el proyecto `fdsu` (Yii 1.1), se puede
+pedir directamente un migration `CDbMigration` en vez del `.sql`:
+
+```bash
+python scripts/generate_db_update.py --db-dsn --format yii
+```
+
+Con `--format yii`, el script **no** escribe el `.sql`: en su lugar
+escribe un `.php` en `data/output/`, nombrado
+`m{YYMMDD}_{HHMMSS}_update_arcgis_upload.php` (convencion de nombres de
+Yii), listo para que lo revise, lo copie a `console/migrations/` dentro
+del repo `fdsu`, y lo ejecute manualmente con:
+
+```bash
+php console/yiic migrate
+```
+
+El contenido replica exactamente los mismos `UPDATE` que generaria el
+`.sql` (misma logica de match; `access_token` y `token_expires_at` en
+`''` salvo `--no-token`, porque las columnas son `NOT NULL`), pero usando los patrones reales de
+`fdsu/console/migrations/`:
+
+- `Yii::app()->dbWrite->createCommand('<sql>')->execute();` por cada fila
+  emparejada, con contador de progreso (`$total`/`$updated`) y `echo` por
+  fila — igual que otras migraciones de datos en ese repo (ej.
+  `m260928_135857_add_v29_91_to_injury_list.php`).
+- `(new CacheDbSchema)->invalidate(['arcgis_upload']);` al final de
+  `up()`, para invalidar el cache de esquema de Yii sobre esa tabla —
+  patron muy comun en ese repo tras modificar datos/columnas.
+- `down()` con `echo "... no soporta rollback ...\n"; return false;`,
+  ya que esta migracion no es reversible (no se conserva el estado
+  anterior de `access_token`/`username`).
+
+Ejemplo (`--format yii`, token anulado):
+
+```php
+<?php
+
+/**
+ * Migration: Update app.arcgis_upload after ArcGIS portal migration.
+ * ...
+ */
+class m261013_170001_update_arcgis_upload extends CDbMigration
+{
+    public function up()
+    {
+        $total = 1;
+        $updated = 0;
+
+        // migration test | client_code=ALEXANDRIA_CITY | item_type_code=hydrants | id=45
+        Yii::app()->dbWrite->createCommand("
+		UPDATE arcgis_upload
+		SET
+			service_url = 'https://services7.arcgis.com/XXXX/arcgis/rest/services/migration_test/FeatureServer',
+			layer_id = '9ffa9ced3fdc46248a4f3700ae8cc685',
+			username = 'it-esri-admin',
+			access_token = '',
+			token_expires_at = ''
+		WHERE
+			id = 45
+	")
+	->execute();
+        $updated++;
+        echo date('Y-m-d H:i:s') . "\n" . "Update {$updated}/{$total} (id=45)" . "\n\n";
+
+        (new CacheDbSchema)->invalidate(['arcgis_upload']);
+
+        return true;
+    }
+
+    public function down()
+    {
+        echo "m261013_170001_update_arcgis_upload no soporta rollback (actualiza access_token/service_url/layer_id).\n";
+        return false;
+    }
+}
+```
+
+Igual que con el `.sql`: este toolkit **no copia ni ejecuta** el `.php`
+en el repo `fdsu`. El token de DESTINO lo escribe despues un comando
+aparte en ese proyecto.
 
 ### Importante: nada se ejecuta automaticamente
 
 Ambos scripts son de **solo lectura** sobre la base de datos (`SELECT`
 unicamente, incluso en modo `--db-dsn` se abre la conexion con
-`readonly=True`). La generacion del token nuevo es una llamada de
-**solo lectura/autenticacion** contra la REST API de ArcGIS (no modifica
-nada en los portales); el `.sql` final —con o sin token— debe ser
-revisado y ejecutado manualmente por el equipo de datos/DBA, igual que el
-resto de este toolkit no actualiza bases de datos directamente (ver
+`readonly=True`). El archivo final (`.sql` o `.php` con `--format yii`)
+debe ser revisado y ejecutado manualmente por el equipo de datos/DBA,
+igual que el resto de este toolkit no actualiza bases de datos
+directamente (ver
 [WORKFLOW.md](WORKFLOW.md), Fase 7).

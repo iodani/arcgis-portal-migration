@@ -42,28 +42,6 @@ ENV_KEYS = (
 PG_DSN_ENV_KEY = "PGDSN"
 PG_DEFAULT_SCHEMA = "app"
 
-# Expiracion (minutos) del token nuevo que generate_db_update.py pide para el
-# portal DESTINO al armar el UPDATE de access_token. Configurable en .env.
-TOKEN_EXPIRATION_ENV_KEY = "TOKEN_EXPIRATION_MINUTES"
-DEFAULT_TOKEN_EXPIRATION_MINUTES = 60
-
-
-def get_token_expiration_minutes() -> int:
-    load_config()
-    raw = os.getenv(TOKEN_EXPIRATION_ENV_KEY, "").strip()
-    if not raw:
-        return DEFAULT_TOKEN_EXPIRATION_MINUTES
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ValueError(
-            f"{TOKEN_EXPIRATION_ENV_KEY} debe ser un entero (minutos), valor actual: {raw!r}"
-        )
-    if value <= 0:
-        raise ValueError(f"{TOKEN_EXPIRATION_ENV_KEY} debe ser mayor a 0, valor actual: {value}")
-    return value
-
-
 def ensure_dirs() -> None:
     for path in (DATA_OUTPUT, STATE_DIR, LOGS_DIR, TEMP_DIR, DATA_DIR / "input"):
         path.mkdir(parents=True, exist_ok=True)

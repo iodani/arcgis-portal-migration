@@ -34,7 +34,7 @@ flowchart TD
 | 5 Migrate | `python scripts/migrate.py` | curated CSV | `mapeo_migracion.csv`, `state.db` | `report.py` |
 | 6 Report | `python scripts/report.py` | `state.db` | `errores_migracion.csv` | external project |
 | 7a Validate DB correlation | `python scripts/validate_db_correlation.py --db-dsn` | `app.arcgis_upload` + source portal | `validacion_correlacion.csv` | `generate_db_update.py` |
-| 7b Generate DB update | `python scripts/generate_db_update.py --db-dsn` | `mapeo_migracion.csv` + `app.arcgis_upload` | `update_arcgis_upload.sql` | DBA runs the SQL manually |
+| 7b Generate DB update | `python scripts/generate_db_update.py --db-dsn` (or `--format yii`) | `mapeo_migracion.csv` + `app.arcgis_upload` | `update_arcgis_upload.sql` or a Yii migration `.php` | DBA runs the SQL / Yii migration manually |
 
 ---
 
@@ -247,11 +247,21 @@ python scripts/generate_db_update.py --db-dsn
 
 Joins `mapeo_migracion.csv` (`Estado == EXITO`) against `app.arcgis_upload` (default join key: `layer_id == ID_Viejo`; `--join-key service_url` is available as an alternative) and writes `data/output/update_arcgis_upload.sql` with one `UPDATE app.arcgis_upload SET service_url = ..., layer_id = ... WHERE id = ...` per match, wrapped in `BEGIN;`/`COMMIT;`.
 
-By default (unless `--no-token`), it also requests one fresh ArcGIS token for `DESTINO_USER`/`DESTINO_PASS` (via REST `generateToken` against `DESTINO_URL`, not the stale **source**-portal token already stored in `access_token`) and adds `username`, `access_token`, `token_expires_at` to each `UPDATE`. Default expiration: 60 minutes, configurable via `TOKEN_EXPIRATION_MINUTES` in `.env` or `--token-expiration-minutes`. The resulting `.sql` therefore holds a live credential while the token is valid — handle it as a secret and apply it before expiration.
+By default (unless `--no-token`), each `UPDATE` also sets `username` to `DESTINO_USER` and clears the stale origin credential with `access_token = ''` and `token_expires_at = ''` (empty string, not NULL: both columns are `NOT NULL`). This script does not generate or embed a destination token; a separate command in the `fdsu` project writes that later.
 
-This script **never executes SQL against the database** — it only reads (to match) and writes the `.sql` file; requesting the token is a read-only auth call against ArcGIS's REST API, not a write to either portal. The data team/DBA reviews and runs the `.sql` manually, consistent with the rest of this toolkit ("this tool does not update databases").
+This script **never executes SQL against the database** — it only reads (to match) and writes the `.sql` file. The data team/DBA reviews and runs the `.sql` manually, consistent with the rest of this toolkit ("this tool does not update databases").
 
 Unmatched `EXITO` rows are reported in `data/output/sin_match_arcgis_upload.csv` so nothing is silently dropped.
+
+### `--format yii`: generate a Yii migration instead of the `.sql`
+
+```bash
+python scripts/generate_db_update.py --db-dsn --format yii
+```
+
+With `--format yii`, the script writes **only** a `.php` migration (`CDbMigration`) in `data/output/`, named `m{YYMMDD}_{HHMMSS}_update_arcgis_upload.php` (Yii's naming convention), instead of the `.sql`. It contains the same `UPDATE`s, but using the real patterns found in `fdsu/console/migrations/`: `Yii::app()->dbWrite->createCommand(...)->execute();` per row with a progress counter/`echo`, and `(new CacheDbSchema)->invalidate(['arcgis_upload']);` at the end of `up()`. `down()` reports the change as non-reversible (`return false;`).
+
+This toolkit does not copy or run that file into the `fdsu` repo — review it, copy it to `console/migrations/`, and run `php console/yiic migrate` manually. The destination token is written afterwards by a separate command in `fdsu`.
 
 ---
 
@@ -297,6 +307,7 @@ These files are created when running the workflow and **are not part of the sour
 | `data/output/sin_match_inventario_db.csv` | `prepare.py` (solo si usa `--db-dsn`/`--arcgis-upload-csv` y hay filas sin resolver) |
 | `data/output/validacion_correlacion.csv` | `validate_db_correlation.py` |
 | `data/output/update_arcgis_upload.sql` | `generate_db_update.py` |
+| `data/output/m{timestamp}_update_arcgis_upload.php` | `generate_db_update.py --format yii` (instead of the `.sql`) |
 | `data/output/sin_match_arcgis_upload.csv` | `generate_db_update.py` (solo si hay filas sin match) |
 | `state/migration_state.db` | `migrate.py` |
 | `logs/<script>_*.log` | all scripts |
