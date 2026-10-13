@@ -23,7 +23,7 @@ Columnas relevantes (schema `app`, Postgres):
 | `id` | integer | PK interna de la tabla |
 | `client_code` | varchar | Cliente propietario del servicio |
 | `service_name` | varchar | Nombre legible del Feature Service |
-| `item_type_code` | varchar | Tipo de capa (`hydrants`, `addresses`, `preplan`, ...) |
+| `item_type_code` | varchar | Codigo del tipo de capa |
 | `service_url` | text | URL raiz del FeatureServer (equivalente a `encodedServiceURL` de Esri) |
 | `layer_id` | text | `itemId` del portal (GUID del item de contenido en ArcGIS Online) — **no** es el indice de capa dentro del FeatureServer |
 | `is_system_account` | boolean | Si la credencial usada para publicar es la cuenta de sistema |
@@ -67,17 +67,10 @@ arcgis_upload.layer_id    (antes de migrar) == mapeo.ID_Viejo   (itemId en orige
 arcgis_upload.service_url (antes de migrar) == mapeo.URL_Vieja (url en origen)
 ```
 
-Esto es consistente con la unica fila observada en el ambiente de
-desarrollo (`id=45`, `client_code=ALEXANDRIA_CITY`, `item_type_code=hydrants`,
-`layer_id=e7cc59e1ab764e9fa85dc571035f4cb5`), cuyo `service_url` todavia
-apunta al org de **origen** (`services8.arcgis.com/jNUIWEZv9aaHqUtJ/...`,
-el mismo org ID que `ORIGEN_URL`/`ORIGEN_USER` en `.env`).
-
-No se pudo confirmar de forma anonima contra la REST API publica de Esri
-(el item es privado -> `403`, el servicio exige token -> `499`), por eso
-existe `validate_db_correlation.py`: usa las credenciales de `.env`
-(`ORIGEN_USER`/`ORIGEN_PASS`) para resolver cada `layer_id` como item de
-portal y comparar su `url` real contra `service_url`.
+Esta hipotesis debe validarse con datos del entorno donde se ejecutara la
+migracion. Para eso existe `validate_db_correlation.py`: usa las
+credenciales configuradas en `.env` para resolver cada `layer_id` como item
+del portal y comparar su URL con `service_url`.
 
 **Antes de confiar en el `.sql` generado por `generate_db_update.py`,
 ejecute `validate_db_correlation.py` y revise que la mayoria de filas sea
@@ -127,14 +120,13 @@ Salida:
   **no** encontraron fila correspondiente en `arcgis_upload` (para que no
   se pierdan en silencio).
 
-Ejemplo de UPDATE generado:
+Ejemplo ilustrativo de UPDATE generado (valores ficticios):
 
 ```sql
--- migration test | client_code=ALEXANDRIA_CITY | item_type_code=hydrants | id=45
 UPDATE app.arcgis_upload
-SET service_url = 'https://services7.arcgis.com/XXXX/arcgis/rest/services/migration_test/FeatureServer',
-    layer_id    = '9ffa9ced3fdc46248a4f3700ae8cc685'
-WHERE id = 45;
+SET service_url = '<DESTINATION_FEATURE_SERVICE_URL>',
+    layer_id    = '<DESTINATION_ITEM_ID>'
+WHERE id = <DATABASE_ROW_ID>;
 ```
 
 ### Token de origen anulado (`access_token` / `token_expires_at`)
@@ -155,12 +147,12 @@ proyecto `fdsu`, fuera de este toolkit.
 
 ```sql
 UPDATE app.arcgis_upload
-SET service_url = 'https://services7.arcgis.com/XXXX/arcgis/rest/services/migration_test/FeatureServer',
-    layer_id    = '9ffa9ced3fdc46248a4f3700ae8cc685',
-    username    = 'it-esri-admin',
+SET service_url = '<DESTINATION_FEATURE_SERVICE_URL>',
+    layer_id    = '<DESTINATION_ITEM_ID>',
+    username    = '<DESTINATION_USERNAME>',
     access_token = '',
     token_expires_at = ''
-WHERE id = 45;
+WHERE id = <DATABASE_ROW_ID>;
 ```
 
 ### Alternativa: generar un migration de Yii en vez del `.sql` (`--format yii`)
@@ -189,8 +181,7 @@ El contenido replica exactamente los mismos `UPDATE` que generaria el
 
 - `Yii::app()->dbWrite->createCommand('<sql>')->execute();` por cada fila
   emparejada, con contador de progreso (`$total`/`$updated`) y `echo` por
-  fila — igual que otras migraciones de datos en ese repo (ej.
-  `m260928_135857_add_v29_91_to_injury_list.php`).
+  fila.
 - `(new CacheDbSchema)->invalidate(['arcgis_upload']);` al final de
   `up()`, para invalidar el cache de esquema de Yii sobre esa tabla —
   patron muy comun en ese repo tras modificar datos/columnas.
@@ -203,32 +194,29 @@ Ejemplo (`--format yii`, token anulado):
 ```php
 <?php
 
-/**
- * Migration: Update app.arcgis_upload after ArcGIS portal migration.
- * ...
- */
-class m261013_170001_update_arcgis_upload extends CDbMigration
+// La clase y el nombre de archivo siguen la convencion de Yii:
+// m{YYMMDD}_{HHMMSS}_update_arcgis_upload.
+class mYYMMDD_HHMMSS_update_arcgis_upload extends CDbMigration
 {
     public function up()
     {
         $total = 1;
         $updated = 0;
 
-        // migration test | client_code=ALEXANDRIA_CITY | item_type_code=hydrants | id=45
         Yii::app()->dbWrite->createCommand("
 		UPDATE arcgis_upload
 		SET
-			service_url = 'https://services7.arcgis.com/XXXX/arcgis/rest/services/migration_test/FeatureServer',
-			layer_id = '9ffa9ced3fdc46248a4f3700ae8cc685',
-			username = 'it-esri-admin',
+			service_url = '<DESTINATION_FEATURE_SERVICE_URL>',
+			layer_id = '<DESTINATION_ITEM_ID>',
+			username = '<DESTINATION_USERNAME>',
 			access_token = '',
 			token_expires_at = ''
 		WHERE
-			id = 45
+			id = <DATABASE_ROW_ID>
 	")
 	->execute();
         $updated++;
-        echo date('Y-m-d H:i:s') . "\n" . "Update {$updated}/{$total} (id=45)" . "\n\n";
+        echo date('Y-m-d H:i:s') . "\n" . "Update {$updated}/{$total}" . "\n\n";
 
         (new CacheDbSchema)->invalidate(['arcgis_upload']);
 
@@ -237,7 +225,7 @@ class m261013_170001_update_arcgis_upload extends CDbMigration
 
     public function down()
     {
-        echo "m261013_170001_update_arcgis_upload no soporta rollback (actualiza access_token/service_url/layer_id).\n";
+        echo "Esta migracion no soporta rollback.\n";
         return false;
     }
 }

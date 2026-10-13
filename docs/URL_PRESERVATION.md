@@ -20,16 +20,9 @@ That looks like “same URL,” but:
 
 A **full copy** (Assistant full copy, `clone_items(copy_data=True)`, or this toolkit’s FGDB → publish path) creates a new hosted service on the destination → **new URL**.
 
-## Empirical check (2026-10-01)
-
-Controlled probe on source Feature Service `EvacuationRoutes` (`d0647baa02f0462e9856f648bc78750e`):
-
-| | Item ID | FeatureServer URL |
-|--|---------|-------------------|
-| Source (fdsu.maps.arcgis.com) | `d0647baa...` | `https://services8.arcgis.com/jNUIWEZv9aaHqUtJ/.../FeatureServer` |
-| Destination after `clone_items(copy_data=False)` | **new** `cf75f1c0...` | **identical** to source URL (org host `jNUIWEZv9aaHqUtJ`) |
-
-Conclusion: **same URL ⇒ reference to source hosting**, not independent data on the destination org. The destination item ID still changes; only the service URL is reused because it still points at the origin.
+Conclusion: **same URL ⇒ reference to source hosting**, not independent
+data on the destination org. The destination item ID still changes; only
+the service URL is reused because it still points at the origin.
 
 This toolkit’s production path (`FeatureServiceDriver`: export FGDB → publish) intentionally creates an independent service → **new URL**, which is why `mapeo_migracion.csv` exists.
 

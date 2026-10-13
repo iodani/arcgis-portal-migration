@@ -207,7 +207,7 @@ Filter `Estado == EXITO` before applying changes to the database.
 
 ```csv
 ID_Viejo,URL_Vieja,ID_Nuevo,URL_Nueva,Titulo,Carpeta_Origen,Estado,Error,Fecha
-daf865312ea445b98dca8f1e763990a9,https://services8.arcgis.com/.../FeatureServer,9ffa9ced3fdc46248a4f3700ae8cc685,https://services7.arcgis.com/.../FeatureServer,12354,RAIZ,EXITO,,2026-08-12 19:45:55
+<SOURCE_ITEM_ID>,<SOURCE_FEATURE_SERVICE_URL>,<DESTINATION_ITEM_ID>,<DESTINATION_FEATURE_SERVICE_URL>,<EXAMPLE_TITLE>,<SOURCE_FOLDER>,EXITO,,<TIMESTAMP>
 ```
 
 ### External consumption pseudocode
